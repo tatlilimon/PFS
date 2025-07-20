@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -66,11 +67,13 @@ func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output stri
 	// Define a function to make an attempt, which can be retried.
 	attempt := func(prompt string) (*Correction, error) {
 		// No verbose output here, as the loading animation will be running.
-		responseText, err := p.getCorrectionText(ctx, prompt)
+		responseText, tokenCount, duration, err := p.getCorrectionText(ctx, prompt)
 		if err != nil {
 			return nil, fmt.Errorf("Ollama API error: %w", err)
 		}
 		if verbose {
+			fmt.Printf("\n\n Tokens Used: %d\n", tokenCount)
+			fmt.Printf("Total Time: %s\n", duration)
 			fmt.Printf("Raw Ollama Response: %s\n", responseText)
 		}
 
@@ -118,7 +121,7 @@ func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output stri
 	return nil, fmt.Errorf("the language model did not return a valid correction after two attempts")
 }
 
-func (p *OllamaProvider) getCorrectionText(ctx context.Context, prompt string) (string, error) {
+func (p *OllamaProvider) getCorrectionText(ctx context.Context, prompt string) (string, int, time.Duration, error) {
 	stream := false
 	req := &api.GenerateRequest{
 		Model:  p.model,
@@ -130,21 +133,25 @@ func (p *OllamaProvider) getCorrectionText(ctx context.Context, prompt string) (
 	}
 
 	var responseText string
+	var evalCount int
+	var evalDuration time.Duration
 	respFunc := func(resp api.GenerateResponse) error {
 		responseText = resp.Response
+		evalCount = resp.EvalCount
+		evalDuration = resp.EvalDuration
 		return nil
 	}
 
 	if err := p.client.Generate(ctx, req, respFunc); err != nil {
-		return "", fmt.Errorf("ollama API error: %w", err)
+		return "", 0, 0, fmt.Errorf("ollama API error: %w", err)
 	}
 
 	// Check if the response is HTML, which might indicate a captive portal or proxy error.
 	if strings.HasPrefix(strings.TrimSpace(responseText), "<!DOCTYPE html>") {
-		return "", fmt.Errorf("received an HTML response instead of JSON. Check for captive portals or network proxy issues")
+		return "", 0, 0, fmt.Errorf("received an HTML response instead of JSON. Check for captive portals or network proxy issues")
 	}
 
-	return responseText, nil
+	return responseText, evalCount, evalDuration, nil
 }
 
 // buildPrompt constructs the initial prompt for the LLM.
