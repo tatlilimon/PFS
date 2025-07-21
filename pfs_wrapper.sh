@@ -99,18 +99,8 @@ function pfs() {
         echo "Error: jq is not installed. Please install jq to use pfs."
         return 1
     fi
-    
-    # 3. Pipe the command's info to the Go application.
-    jq -n --arg cmd "$command_to_use" --arg exit_code "$exit_code_to_use" \
-        '{command: $cmd, exit_code: $exit_code | tonumber, output: ""}' | /usr/local/bin/pfs "$@"
 
-    # 4. Handle the corrected command from the Go app.
-    local corrected_cmd_file="/tmp/pfs_cmd"
-    if [ -f "$corrected_cmd_file" ]; then
-        local corrected_command
-        corrected_command=$(cat "$corrected_cmd_file")
-        rm -f "$corrected_cmd_file"
-        echo "Executing: $corrected_command"
-        eval "$corrected_command"
-    fi
+    # 3. Pipe the command's info to the Go application.
+    jq -n --arg cmd "$command_to_use" --arg exit_code "$exit_code_to_use" --arg output "" \
+        '{command: $cmd, exit_code: $exit_code | tonumber, output: $output}' | /usr/local/bin/pfs "$@"
 }
