@@ -34,13 +34,6 @@ Build the binary and move the  binary to a directory in your system's `PATH`.
 go build -o /usr/local/bin/pfs ./cmd/
 ```
 
-### 3. Install the Binary
-
-
-```bash
-sudo mv pfs /usr/local/bin/
-```
-
 ## Configuration
 
 `PFS` uses a `.env` file in your home directory to store your Ollama settings.
