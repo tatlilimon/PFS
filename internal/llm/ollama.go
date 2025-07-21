@@ -160,7 +160,7 @@ func buildPrompt(command, output string, exitCode int) string {
 		`You are a command-line expert. A user's command failed.
 	           - Command: %s
 	           - Exit Code: %d
-	           - Output: %s
+	           - Command Output: %s
 
 	           Analyze the command, exit code, and output. An exit code of 127 typically means "command not found".
 	           Your response MUST be a single, raw JSON object with two keys: "corrected_command" and "explanation".
@@ -191,7 +191,7 @@ func buildRetryPrompt(command, output string, exitCode int) string {
 		`Your previous response was not valid JSON. You MUST try again.
 	           The user's command was: %s
 	           It failed with exit code: %d
-	           The output was: %s
+	           The command output was: %s
 
 	           Provide a direct JSON object response with the keys "corrected_command" and "explanation".
 	           DO NOT write any text other than the JSON object itself.`,

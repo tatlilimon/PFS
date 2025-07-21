@@ -27,14 +27,15 @@ cd PFS
 ```
 
 ### 2. Build the Binary
+Build the binary and move the  binary to a directory in your system's `PATH`.
+
 
 ```bash
-go build -o pfs ./cmd/
+go build -o /usr/local/bin/pfs ./cmd/
 ```
 
 ### 3. Install the Binary
 
-Move the compiled binary to a directory in your system's `PATH`.
 
 ```bash
 sudo mv pfs /usr/local/bin/
