@@ -10,6 +10,7 @@ import (
 
 	"github.com/ollama/ollama/api"
 	"github.com/stretchr/testify/assert"
+	"github.com/tatlilimon/PFS/internal/config"
 )
 
 func TestOllamaProvider_GetCorrection(t *testing.T) {
@@ -34,16 +35,20 @@ func TestOllamaProvider_GetCorrection(t *testing.T) {
 	assert.NoError(t, err)
 	client := api.NewClient(parsedURL, http.DefaultClient)
 
-	provider := &OllamaProvider{client: client, model: "deepseek-r1:1.5b"}
+	provider := &OllamaProvider{client: client, cfg: &config.Config{OllamaModel: "test-model"}}
 
 	// Call the method being tested
-	correction, err := provider.GetCorrection(context.Background(), "lş -l", "lş: invalid option -- 'l'", 1, false)
+	correction, err := provider.GetCorrection(context.Background(), "lş -l", "lş: invalid option -- 'l'", 1)
 
 	// Check the result
 	assert.NoError(t, err)
 	assert.NotNil(t, correction)
-	assert.Equal(t, "mock explanation", correction.Explanation)
-	assert.Equal(t, "mock command", correction.CorrectedCommand)
+	if assert.NotNil(t, correction.Explanation) {
+		assert.Equal(t, "mock explanation", *correction.Explanation)
+	}
+	if assert.NotNil(t, correction.CorrectedCommand) {
+		assert.Equal(t, "mock command", *correction.CorrectedCommand)
+	}
 }
 
 func TestNewOllamaProvider_HTTPS(t *testing.T) {
@@ -57,7 +62,8 @@ func TestNewOllamaProvider_HTTPS(t *testing.T) {
 	defer server.Close()
 
 	// The server's client is used to handle the self-signed certificate.
-	provider, err := newOllamaProviderWithClient(server.URL, "test-model", server.Client())
+	cfg := &config.Config{OllamaBaseURL: server.URL, OllamaModel: "test-model"}
+	provider, err := newOllamaProviderWithClient(cfg, server.Client())
 
 	// Assert that the provider was created successfully without any errors.
 	assert.NoError(t, err)

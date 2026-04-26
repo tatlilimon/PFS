@@ -8,6 +8,7 @@
 __PFS_LAST_COMMAND=""
 __PFS_LAST_EXIT_CODE=""
 __PFS_LAST_COMMAND_SAVED_FOR_DEBUG_TRAP="" # Bash specific
+__PFS_COMMAND_WAS_PFS=0 # Flag to track if the last command was pfs
 
 # --- Shell-Specific Hooks ---
 
@@ -18,14 +19,19 @@ if [ -n "$ZSH_VERSION" ]; then
     
     # Executed before a command is run. Store the command string.
     pfs_preexec() {
-        if [[ "$1" != "pfs"* ]]; then
+        if [[ "$1" == "pfs"* ]]; then
+            __PFS_COMMAND_WAS_PFS=1
+        else
+            __PFS_COMMAND_WAS_PFS=0
             __PFS_LAST_COMMAND="$1"
         fi
     }
     
     # Executed before the prompt is displayed. Store the exit code.
     pfs_precmd() {
-        __PFS_LAST_EXIT_CODE=$?
+        if [ "$__PFS_COMMAND_WAS_PFS" -eq 0 ]; then
+            __PFS_LAST_EXIT_CODE=$?
+        fi
     }
     
     # Register the hooks
@@ -40,17 +46,22 @@ elif [ -n "$BASH_VERSION" ]; then
     # It's tricky because it also runs for PROMPT_COMMAND, so need a guard.
     pfs_debug_trap() {
         # Save the command, prevent recursion with PROMPT_COMMAND, and ignore `pfs` itself.
-        if [ "$BASH_COMMAND" != "$__PFS_LAST_COMMAND_SAVED_FOR_DEBUG_TRAP" ] && [[ "$BASH_COMMAND" != "pfs"* ]]; then
-            # To avoid capturing the `pfs` command itself, add a condition.
-            # This ensures __PFS_LAST_COMMAND holds the command that failed.
-            __PFS_LAST_COMMAND="$BASH_COMMAND"
+        if [ "$BASH_COMMAND" != "$__PFS_LAST_COMMAND_SAVED_FOR_DEBUG_TRAP" ]; then
+            if [[ "$BASH_COMMAND" == "pfs"* ]]; then
+                __PFS_COMMAND_WAS_PFS=1
+            else
+                __PFS_COMMAND_WAS_PFS=0
+                __PFS_LAST_COMMAND="$BASH_COMMAND"
+            fi
         fi
     }
     
     # PROMPT_COMMAND runs just before the prompt. We save the exit code here.
     # We also update the guard variable for the DEBUG trap.
     pfs_prompt_command() {
-        __PFS_LAST_EXIT_CODE=$?
+        if [ "$__PFS_COMMAND_WAS_PFS" -eq 0 ]; then
+            __PFS_LAST_EXIT_CODE=$?
+        fi
         __PFS_LAST_COMMAND_SAVED_FOR_DEBUG_TRAP="$__PFS_LAST_COMMAND"
     }
 

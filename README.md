@@ -98,13 +98,36 @@ source ~/.zshrc
 3.  The tool will provide an explanation and a corrected command.
 4.  Press `y` and Enter to execute the new command, or `n` to abort.
 
-## Debugging
+## Configuration Flags
 
-`PFS` provides a `--verbose` flag for debugging purposes, which provides detailed output about the interaction with the Ollama model.
+You can configure `PFS` directly from the command line.
 
-Example:
+### Offline Mode
+
+To disable the Brave Search integration and rely solely on the local LLM, you can use the `--offline` flag.
+
 ```bash
-pfs --verbose
+# Disable online mode
+pfs --offline=false
+
+# Enable online mode
+pfs --offline=true
+```
+
+### Debug Levels
+
+`PFS` offers granular control over debugging output.
+
+- **Level 0 (Default):** No debug output.
+- **Level 1 (Basic):** Shows basic information about the current stage.
+- **Level 2 (Detailed):** Provides detailed information, including prompts, responses, and interactions with Brave Search API.
+
+```bash
+# Set debug level to basic
+pfs --debug=1
+
+# Set debug level to detailed
+pfs --debug=2
 ```
 
 ## Feel Free to Contribute This Project!
