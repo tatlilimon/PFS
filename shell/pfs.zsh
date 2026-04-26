@@ -31,9 +31,11 @@ pfs_preexec() {
 
 # precmd: fires before each prompt. $? and $pipestatus reflect the last pipeline.
 pfs_precmd() {
+    local _exit=$?
+    local _pipes="${pipestatus[*]}"
     if [ "$_PFS_SKIP_CAPTURE" -eq 0 ]; then
-        _PFS_LAST_EXIT=$?
-        _PFS_LAST_PIPESTATUS="${pipestatus[*]}"
+        _PFS_LAST_EXIT=$_exit
+        _PFS_LAST_PIPESTATUS="$_pipes"
     fi
 }
 

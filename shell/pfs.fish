@@ -32,9 +32,11 @@ end
 
 # fish_postexec: fires after each command. $status and $pipestatus are available.
 function __pfs_postexec --on-event fish_postexec
+    set -l _exit $status
+    set -l _pipes (string join " " $pipestatus)
     if test "$__pfs_skip_capture" -eq 0
-        set -g __pfs_last_exit $status
-        set -g __pfs_last_pipestatus (string join " " $pipestatus)
+        set -g __pfs_last_exit $_exit
+        set -g __pfs_last_pipestatus $_pipes
     end
 end
 
