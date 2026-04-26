@@ -63,6 +63,15 @@ fi
 
 # --- The pfs function ---
 pfs() {
+    # If arguments are passed and they're not fix/explain subcommands,
+    # pass through to the Go binary directly (e.g., --version, setup, config).
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            fix|explain) ;; # fall through to captured-env flow
+            *) command pfs "$@"; return $? ;;
+        esac
+    fi
+
     if [ "$__PFS_LAST_EXIT" -eq 0 ]; then
         echo "✅ Last command was successful."
         return 0

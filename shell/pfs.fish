@@ -40,10 +40,38 @@ end
 
 # --- The pfs function ---
 function pfs
+    # If arguments are passed and they're not fix/explain subcommands,
+    # pass through to the Go binary directly (e.g., --version, setup, config).
+    if test (count $argv) -gt 0
+        switch $argv[1]
+            case fix explain
+                # fall through to captured-env flow
+            case '*'
+                command pfs $argv
+                return $status
+        end
+    end
+
     if test "$__pfs_last_exit" -eq 0
         echo "✅ Last command was successful."
         return 0
     end
+
+    set -lx PFS_CMD "$__pfs_last_cmd"
+    set -lx PFS_EXIT "$__pfs_last_exit"
+    set -lx PFS_PIPESTATUS "$__pfs_last_pipestatus"
+    set -lx PFS_OUTPUT ""
+    set -lx PFS_CWD "$PWD"
+    set -lx PFS_SHELL="fish"
+
+    set -l corrected (env PFS_CMD="$PFS_CMD" PFS_EXIT="$PFS_EXIT" \
+        PFS_PIPESTATUS="$PFS_PIPESTATUS" PFS_OUTPUT="" \
+        PFS_CWD="$PFS_CWD" PFS_SHELL="fish" \
+        command pfs $argv)
+    if test -n "$corrected"
+        eval $corrected
+    end
+end
 
     set -lx PFS_CMD "$__pfs_last_cmd"
     set -lx PFS_EXIT "$__pfs_last_exit"
