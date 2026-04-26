@@ -18,9 +18,9 @@ const (
 	ConfirmDismiss
 )
 
-// openInEditor opens the command in $EDITOR (or vi) for editing.
+// OpenInEditor opens the command in $EDITOR (or vi) for editing.
 // It creates a secure temp file, runs the editor, and reads back the result.
-func openInEditor(command string) (string, error) {
+func OpenInEditor(command string) (string, error) {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vi"

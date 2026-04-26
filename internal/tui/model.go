@@ -30,6 +30,7 @@ const spinnerFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 type Model struct {
 	state    State
 	config   *config.Config
+	provider *llm.OllamaProvider
 	envCtx   llm.EnvironmentContext
 	command  string
 	output   string
@@ -60,11 +61,12 @@ type correctionResultMsg struct {
 	err        error
 }
 
-func NewModel(cfg *config.Config, envCtx llm.EnvironmentContext, command, output string, exitCode int) Model {
+func NewModel(cfg *config.Config, provider *llm.OllamaProvider, envCtx llm.EnvironmentContext, command, output string, exitCode int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
 		state:    StateLoading,
 		config:   cfg,
+		provider: provider,
 		envCtx:   envCtx,
 		command:  command,
 		output:   output,
@@ -77,7 +79,19 @@ func NewModel(cfg *config.Config, envCtx llm.EnvironmentContext, command, output
 }
 
 func (m Model) Init() tea.Cmd {
-	return tickSpinner()
+	return tea.Batch(tickSpinner(), m.startLLMCall())
+}
+
+func (m Model) startLLMCall() tea.Cmd {
+	if m.provider == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+		defer cancel()
+		correction, err := m.provider.GetCorrection(ctx, m.command, m.output, m.exitCode, m.envCtx)
+		return correctionResultMsg{correction: correction, err: err}
+	}
 }
 
 func tickSpinner() tea.Cmd {

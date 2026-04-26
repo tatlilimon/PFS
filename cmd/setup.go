@@ -19,30 +19,70 @@ var setupCmd = &cobra.Command{
 			shell = "/bin/bash"
 		}
 
-		var rcFile string
+		var rcFile, wrapperFile string
 		switch {
 		case strings.Contains(shell, "zsh"):
 			rcFile = "~/.zshrc"
-		case strings.Contains(shell, "bash"):
-			rcFile = "~/.bashrc"
+			wrapperFile = "pfs.zsh"
 		case strings.Contains(shell, "fish"):
 			rcFile = "~/.config/fish/config.fish"
+			wrapperFile = "pfs.fish"
 		default:
 			rcFile = "~/.bashrc"
+			wrapperFile = "pfs.bash"
 		}
 
-		home, _ := os.UserHomeDir()
-		configPath := filepath.Join(home, ".pfs.env")
+		// Detect wrapper directory — check common install locations
+		wrapperDir := detectWrapperDir()
 
-		fmt.Printf("PFS Shell Setup\n")
-		fmt.Printf("===============\n\n")
-		fmt.Printf("Detected shell: %s\n\n", shell)
-		fmt.Printf("Add this line to %s:\n\n", rcFile)
-		fmt.Printf("  source <(pfs init %s)\n\n", filepath.Base(shell))
-		fmt.Printf("Then reload your shell:\n\n")
-		fmt.Printf("  source %s\n\n", rcFile)
-		fmt.Printf("Config file location: %s\n", configPath)
+		fmt.Fprintf(cmd.OutOrStdout(), "PFS Shell Setup\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "===============\n\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "Detected shell: %s\n\n", shell)
+		fmt.Fprintf(cmd.OutOrStdout(), "Add this line to %s:\n\n", rcFile)
+		fmt.Fprintf(cmd.OutOrStdout(), "  source %s/shell/%s\n\n", wrapperDir, wrapperFile)
+		fmt.Fprintf(cmd.OutOrStdout(), "Then reload your shell:\n\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "  source %s\n\n", rcFile)
+
+		// Config location
+		configDir, _ := os.UserConfigDir()
+		if configDir == "" {
+			configDir = "~/.config"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Config file: %s/pfs/config.yaml\n", configDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "\nFirst run tips:\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "  • Make sure Ollama is running: ollama serve\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "  • Pull a model: ollama pull llama3.2\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "  • Just type 'pfs' after a failed command\n")
 
 		return nil
 	},
+}
+
+func detectWrapperDir() string {
+	// Try to find the wrapper directory relative to the binary
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		shellDir := filepath.Join(dir, "..", "shell")
+		if _, err := os.Stat(filepath.Join(shellDir, "pfs.bash")); err == nil {
+			abs, _ := filepath.Abs(shellDir)
+			return abs
+		}
+	}
+
+	// Check common locations
+	candidates := []string{
+		"/usr/local/share/pfs",
+		"/usr/share/pfs",
+		".",
+	}
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "shell", "pfs.bash")); err == nil {
+			abs, _ := filepath.Abs(dir)
+			return abs
+		}
+	}
+
+	// Fallback: tell user to use the repo path
+	return "/path/to/PFS"
 }

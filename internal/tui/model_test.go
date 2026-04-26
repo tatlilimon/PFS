@@ -18,7 +18,7 @@ func TestNewModel(t *testing.T) {
 	cfg := &config.Config{OllamaModel: "test-model"}
 	envCtx := llm.EnvironmentContext{OS: "linux", Shell: "bash"}
 
-	m := NewModel(cfg, envCtx, "git push", "error: failed", 1)
+	m := NewModel(cfg, nil, envCtx, "git push", "error: failed", 1)
 
 	assert.Equal(t, StateLoading, m.state)
 	assert.Equal(t, cfg, m.config)
@@ -31,7 +31,7 @@ func TestNewModel(t *testing.T) {
 }
 
 func TestModelView_Loading(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "no error", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "no error", 0)
 	view := m.View()
 	content := view.Content
 	assert.Contains(t, content, "Analyzing")
@@ -41,7 +41,7 @@ func TestModelView_Loading(t *testing.T) {
 func TestModelView_Result(t *testing.T) {
 	corrected := "git push origin main"
 	explanation := "You need to specify the remote and branch."
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "git push", "error", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "git push", "error", 1)
 	m.state = StateResult
 	m.correction = &llm.Correction{
 		Diagnosis:        "Missing remote and branch arguments.",
@@ -61,7 +61,7 @@ func TestModelView_Result(t *testing.T) {
 }
 
 func TestModelView_ResultWithoutCorrection(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateResult
 	m.correction = &llm.Correction{
 		Diagnosis:  "Command is correct.",
@@ -75,7 +75,7 @@ func TestModelView_ResultWithoutCorrection(t *testing.T) {
 
 func TestModelView_ResultLowConfidence(t *testing.T) {
 	corrected := "maybe this"
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "bad", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "bad", "err", 1)
 	m.state = StateResult
 	m.correction = &llm.Correction{
 		Diagnosis:        "Uncertain.",
@@ -89,7 +89,7 @@ func TestModelView_ResultLowConfidence(t *testing.T) {
 }
 
 func TestModelView_Error(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 1)
 	m.state = StateError
 	m.err = errors.New("connection refused")
 
@@ -100,21 +100,21 @@ func TestModelView_Error(t *testing.T) {
 }
 
 func TestModelUpdate_Quit(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	assert.NotNil(t, cmd)
 }
 
 func TestModelUpdate_CtrlX_Quit(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	assert.NotNil(t, cmd)
 }
 
 func TestModelUpdate_SpinnerTick(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	assert.Equal(t, 0, m.spinnerFrame)
 
 	updated, cmd := m.Update(spinnerTickMsg{})
@@ -126,7 +126,7 @@ func TestModelUpdate_SpinnerTick(t *testing.T) {
 }
 
 func TestModelUpdate_SpinnerStopsOnResult(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateResult
 
 	_, cmd := m.Update(spinnerTickMsg{})
@@ -134,7 +134,7 @@ func TestModelUpdate_SpinnerStopsOnResult(t *testing.T) {
 }
 
 func TestModelUpdate_CorrectionResult(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	corrected := "ls -la"
 
 	updated, _ := m.Update(correctionResultMsg{
@@ -153,7 +153,7 @@ func TestModelUpdate_CorrectionResult(t *testing.T) {
 }
 
 func TestModelUpdate_CorrectionError(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 
 	updated, _ := m.Update(correctionResultMsg{
 		err: errors.New("timeout"),
@@ -166,7 +166,7 @@ func TestModelUpdate_CorrectionError(t *testing.T) {
 }
 
 func TestModelUpdate_WindowSize(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
@@ -177,7 +177,7 @@ func TestModelUpdate_WindowSize(t *testing.T) {
 }
 
 func TestModelUpdate_XKeyOnResult(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateResult
 	corrected := "ls -la"
 	m.correction = &llm.Correction{
@@ -191,7 +191,7 @@ func TestModelUpdate_XKeyOnResult(t *testing.T) {
 }
 
 func TestSetCorrection(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	corrected := "ls -la"
 	c := &llm.Correction{
 		Diagnosis:        "Use -la.",
@@ -205,7 +205,7 @@ func TestSetCorrection(t *testing.T) {
 }
 
 func TestSetError(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	err := errors.New("test error")
 	m.SetError(err)
 	assert.Equal(t, StateError, m.state)
@@ -213,7 +213,7 @@ func TestSetError(t *testing.T) {
 }
 
 func TestGetCommand(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	assert.Equal(t, "", m.GetCommand())
 
 	corrected := "ls -la"
@@ -224,7 +224,7 @@ func TestGetCommand(t *testing.T) {
 }
 
 func TestGetState(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	assert.Equal(t, StateLoading, m.GetState())
 
 	m.state = StateResult
@@ -232,7 +232,7 @@ func TestGetState(t *testing.T) {
 }
 
 func TestGetError(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	assert.Nil(t, m.GetError())
 
 	err := errors.New("fail")
@@ -276,7 +276,7 @@ func TestIsTerminal(t *testing.T) {
 }
 
 func TestViewEmptyOnUnknownState(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = State(99)
 	view := m.View()
 	assert.Equal(t, "", strings.TrimSpace(view.Content))

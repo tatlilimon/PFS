@@ -17,7 +17,7 @@ func TestStreamingToggle_SpinnerToStream(t *testing.T) {
 		OllamaBaseURL: "http://localhost:11434",
 		OllamaModel:   "test",
 	}
-	m := NewModel(cfg, llm.EnvironmentContext{}, "ls", "err", 1)
+	m := NewModel(cfg, nil, llm.EnvironmentContext{}, "ls", "err", 1)
 	assert.Equal(t, StateLoading, m.GetState())
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
@@ -34,7 +34,7 @@ func TestStreamingToggle_StreamToSpinner(t *testing.T) {
 		OllamaBaseURL: "http://localhost:11434",
 		OllamaModel:   "test",
 	}
-	m := NewModel(cfg, llm.EnvironmentContext{}, "ls", "err", 1)
+	m := NewModel(cfg, nil, llm.EnvironmentContext{}, "ls", "err", 1)
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	m2 := updated.(Model)
@@ -50,7 +50,7 @@ func TestStreamingToggle_StreamToSpinner(t *testing.T) {
 }
 
 func TestStreamingView(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 	m.stream = &streamState{}
 	m.stream.buf.WriteString("partial response text")
@@ -63,7 +63,7 @@ func TestStreamingView(t *testing.T) {
 }
 
 func TestStreamingView_Empty(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 	m.stream = &streamState{}
 
@@ -74,7 +74,7 @@ func TestStreamingView_Empty(t *testing.T) {
 }
 
 func TestStreamingCancel(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 	m.stream = &streamState{}
 
@@ -83,7 +83,7 @@ func TestStreamingCancel(t *testing.T) {
 }
 
 func TestStreaming_StaleCorrectionResultIgnored(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 
 	corrected := "ls -la"
@@ -102,7 +102,7 @@ func TestStreaming_StaleCorrectionResultIgnored(t *testing.T) {
 }
 
 func TestStreaming_DoneMsgTransitionsToResult(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 
 	corrected := "ls -la"
@@ -122,7 +122,7 @@ func TestStreaming_DoneMsgTransitionsToResult(t *testing.T) {
 }
 
 func TestStreaming_DoneMsgError(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 
 	updated, cmd := m.Update(streamingDoneMsg{
@@ -137,7 +137,7 @@ func TestStreaming_DoneMsgError(t *testing.T) {
 }
 
 func TestStreaming_StaleDoneMsgIgnored(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateResult
 
 	corrected := "ls -la"
@@ -156,7 +156,7 @@ func TestStreaming_StaleDoneMsgIgnored(t *testing.T) {
 }
 
 func TestStreaming_TickContinuesDuringStreaming(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateStreaming
 	m.stream = &streamState{}
 
@@ -165,7 +165,7 @@ func TestStreaming_TickContinuesDuringStreaming(t *testing.T) {
 }
 
 func TestStreaming_CtrlXInResultStateQuits(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "", 0)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "", 0)
 	m.state = StateResult
 	corrected := "ls -la"
 	m.correction = &llm.Correction{

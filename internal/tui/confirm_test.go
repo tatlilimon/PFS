@@ -15,7 +15,7 @@ import (
 )
 
 func newConfirmModel(command string) Model {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, command, "error", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, command, "error", 1)
 	corrected := command + " --fixed"
 	m.state = StateConfirm
 	m.correction = &llm.Correction{
@@ -111,7 +111,7 @@ func TestConfirmDismiss_Escape(t *testing.T) {
 
 func TestConfirmLowConfidence(t *testing.T) {
 	corrected := "maybe-fix"
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "bad", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "bad", "err", 1)
 	m.state = StateConfirm
 	m.correction = &llm.Correction{
 		Diagnosis:        "Uncertain fix.",
@@ -127,7 +127,7 @@ func TestConfirmLowConfidence(t *testing.T) {
 
 func TestConfirmMediumConfidence_NoWarning(t *testing.T) {
 	corrected := "likely-fix"
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "bad", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "bad", "err", 1)
 	m.state = StateConfirm
 	m.correction = &llm.Correction{
 		Diagnosis:        "Probable fix.",
@@ -141,7 +141,7 @@ func TestConfirmMediumConfidence_NoWarning(t *testing.T) {
 }
 
 func TestConfirmEmptyCorrection_SkipsConfirm(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "output", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "output", 1)
 
 	updated, _ := m.Update(correctionResultMsg{
 		correction: &llm.Correction{
@@ -156,7 +156,7 @@ func TestConfirmEmptyCorrection_SkipsConfirm(t *testing.T) {
 }
 
 func TestConfirmWithCorrection_EntersConfirm(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "output", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "output", 1)
 	corrected := "ls -la"
 
 	updated, _ := m.Update(correctionResultMsg{
@@ -207,7 +207,7 @@ func TestConfirmView_ShowsConfidenceIcon(t *testing.T) {
 }
 
 func TestConfirmRun_NoCorrection_NoOp(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "err", 1)
 	m.state = StateConfirm
 	m.correction = &llm.Correction{
 		Diagnosis:  "No fix available.",
@@ -240,7 +240,7 @@ func TestOpenInEditor_WithMockEditor(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Setenv("EDITOR", script)
-	result, err := openInEditor("git push")
+	result, err := OpenInEditor("git push")
 	require.NoError(t, err)
 	assert.Equal(t, editedContent, result)
 }
@@ -257,7 +257,7 @@ func TestOpenInEditor_EditorFails(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Setenv("EDITOR", script)
-	_, err = openInEditor("git push")
+	_, err = OpenInEditor("git push")
 	assert.Error(t, err)
 }
 
@@ -311,7 +311,7 @@ func TestConfirm_IgnoresIrrelevantKeys(t *testing.T) {
 }
 
 func TestStreamingCorrection_EntersConfirm(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "err", 1)
 	m.state = StateStreaming
 	corrected := "ls -la"
 
@@ -329,7 +329,7 @@ func TestStreamingCorrection_EntersConfirm(t *testing.T) {
 }
 
 func TestStreamingCorrection_NoCommand_EntersResult(t *testing.T) {
-	m := NewModel(&config.Config{}, llm.EnvironmentContext{}, "ls", "err", 1)
+	m := NewModel(&config.Config{}, nil, llm.EnvironmentContext{}, "ls", "err", 1)
 	m.state = StateStreaming
 
 	updated, _ := m.Update(streamingDoneMsg{
