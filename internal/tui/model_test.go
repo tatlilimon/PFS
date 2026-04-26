@@ -147,7 +147,7 @@ func TestModelUpdate_CorrectionResult(t *testing.T) {
 
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
-	assert.Equal(t, StateResult, updatedM.state)
+	assert.Equal(t, StateConfirm, updatedM.state)
 	assert.NotNil(t, updatedM.correction)
 	assert.Equal(t, "Try with -la flag.", updatedM.correction.Diagnosis)
 }

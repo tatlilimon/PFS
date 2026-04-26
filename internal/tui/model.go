@@ -22,6 +22,7 @@ const (
 	StateResult
 	StateError
 	StateConfirm
+	StateStreaming
 )
 
 const spinnerFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -37,14 +38,19 @@ type Model struct {
 	correction *llm.Correction
 	err        error
 
-	styles  Styles
-	width   int
-	height  int
+	CorrectedOutput string
+	WantsEdit       bool
+
+	styles Styles
+	width  int
+	height int
 
 	spinnerFrame int
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	stream *streamState
 }
 
 type spinnerTickMsg time.Time
@@ -55,6 +61,7 @@ type correctionResultMsg struct {
 }
 
 func NewModel(cfg *config.Config, envCtx llm.EnvironmentContext, command, output string, exitCode int) Model {
+	ctx, cancel := context.WithCancel(context.Background())
 	return Model{
 		state:    StateLoading,
 		config:   cfg,
@@ -64,6 +71,8 @@ func NewModel(cfg *config.Config, envCtx llm.EnvironmentContext, command, output
 		exitCode: exitCode,
 		styles:   DefaultStyles(),
 		width:    80,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -90,15 +99,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 			return m, tickSpinner()
 		}
+		if m.state == StateStreaming {
+			return m, tickSpinner()
+		}
 		return m, nil
-	case correctionResultMsg:
+	case streamingDoneMsg:
+		if m.state != StateStreaming {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.state = StateError
 			m.err = msg.err
 			return m, tea.Quit
 		}
-		m.state = StateResult
 		m.correction = msg.correction
+		if msg.correction.CorrectedCommand != nil && *msg.correction.CorrectedCommand != "" {
+			m.state = StateConfirm
+		} else {
+			m.state = StateResult
+		}
+		return m, nil
+	case correctionResultMsg:
+		if m.state == StateStreaming {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.state = StateError
+			m.err = msg.err
+			return m, tea.Quit
+		}
+		m.correction = msg.correction
+		if msg.correction.CorrectedCommand != nil && *msg.correction.CorrectedCommand != "" {
+			m.state = StateConfirm
+		} else {
+			m.state = StateResult
+		}
 		return m, nil
 	default:
 		return m, nil
@@ -107,18 +142,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "ctrl+x":
+	case "ctrl+c":
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.CorrectedOutput = ""
 		return m, tea.Quit
-	case "r":
-		if m.state == StateResult && m.correction != nil && m.correction.CorrectedCommand != nil {
-			return m, tea.Quit
-		}
-	case "e":
-		if m.state == StateResult {
-			return m, tea.Quit
-		}
-	case "x", "q":
-		if m.state == StateResult || m.state == StateError {
+	case "ctrl+x":
+		return m.handleCtrlX()
+	}
+
+	switch m.state {
+	case StateConfirm:
+		return m.handleConfirmKey(msg)
+	case StateResult, StateError:
+		if msg.String() == "x" || msg.String() == "q" {
+			m.CorrectedOutput = ""
 			return m, tea.Quit
 		}
 	}
@@ -129,6 +168,10 @@ func (m Model) View() tea.View {
 	switch m.state {
 	case StateLoading:
 		return tea.NewView(m.viewLoading())
+	case StateStreaming:
+		return tea.NewView(m.viewStreaming())
+	case StateConfirm:
+		return tea.NewView(m.viewConfirm())
 	case StateResult:
 		return tea.NewView(m.viewResult())
 	case StateError:
@@ -142,7 +185,7 @@ func (m Model) viewLoading() string {
 	frame := string(spinnerFrames[m.spinnerFrame])
 	spinner := m.styles.TitleStyle.Render(frame)
 	text := fmt.Sprintf("%s Analyzing command...", spinner)
-	hint := m.styles.MetadataStyle.Render("Press Ctrl+X to dismiss")
+	hint := m.styles.MetadataStyle.Render("Press Ctrl+X for streaming mode")
 	return text + "\n" + hint
 }
 
@@ -240,6 +283,11 @@ func (m Model) GetCommand() string {
 		return *m.correction.CorrectedCommand
 	}
 	return ""
+}
+
+// GetCorrectedOutput returns the final output for stdout after user confirmation.
+func (m Model) GetCorrectedOutput() string {
+	return m.CorrectedOutput
 }
 
 // GetState returns the current model state.
