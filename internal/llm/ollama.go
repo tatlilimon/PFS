@@ -6,43 +6,35 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/ollama/ollama/api"
+	"github.com/tatlilimon/PFS/internal/config"
 )
 
-// Correction represents the structured response from an LLM provider.
-type Correction struct {
-	Explanation      string `json:"explanation"`
-	CorrectedCommand string `json:"corrected_command"`
-}
-
-// OllamaProvider implements the Provider interface for local Ollama models.
+// OllamaProvider implements LLM corrections via a local Ollama instance.
 type OllamaProvider struct {
 	client *api.Client
-	model  string
+	cfg    *config.Config
 }
 
 // NewOllamaProvider creates a new Ollama provider with the given configuration.
-func NewOllamaProvider() (*OllamaProvider, error) {
-	baseURL := os.Getenv("OLLAMA_BASE_URL")
-	if baseURL == "" {
+func NewOllamaProvider(cfg *config.Config) (*OllamaProvider, error) {
+	if cfg.OllamaBaseURL == "" {
 		return nil, fmt.Errorf("OLLAMA_BASE_URL is not set")
 	}
-	model := os.Getenv("OLLAMA_MODEL")
-	if model == "" {
+	if cfg.OllamaModel == "" {
 		return nil, fmt.Errorf("OLLAMA_MODEL is not set")
 	}
 
-	return newOllamaProviderWithClient(baseURL, model, http.DefaultClient)
+	return newOllamaProviderWithClient(cfg, http.DefaultClient)
 }
 
 // newOllamaProviderWithClient creates a new Ollama provider with a custom http.Client,
 // allowing for testing and custom transport configurations.
-func newOllamaProviderWithClient(baseURL, model string, httpClient *http.Client) (*OllamaProvider, error) {
-	parsedURL, err := url.Parse(baseURL)
+func newOllamaProviderWithClient(cfg *config.Config, httpClient *http.Client) (*OllamaProvider, error) {
+	parsedURL, err := url.Parse(cfg.OllamaBaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ollama baseurl: %w", err)
 	}
@@ -54,78 +46,93 @@ func newOllamaProviderWithClient(baseURL, model string, httpClient *http.Client)
 		return nil, fmt.Errorf("Ollama server is not running: %w", err)
 	}
 
-	return &OllamaProvider{client: client, model: model}, nil
+	return &OllamaProvider{client: client, cfg: cfg}, nil
 }
 
 // ModelName returns the name of the Ollama model being used.
 func (p *OllamaProvider) ModelName() string {
-	return p.model
+	return p.cfg.OllamaModel
 }
 
 // GetCorrection sends a request to the Ollama API to correct a failed shell command.
-func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output string, exitCode int, verbose bool) (*Correction, error) {
-	// Define a function to make an attempt, which can be retried.
-	attempt := func(prompt string) (*Correction, error) {
-		// No verbose output here, as the loading animation will be running.
-		responseText, tokenCount, duration, err := p.getCorrectionText(ctx, prompt)
-		if err != nil {
-			return nil, fmt.Errorf("Ollama API error: %w", err)
-		}
-		if verbose {
-			fmt.Printf("\n\n Tokens Used: %d\n", tokenCount)
-			fmt.Printf("Total Time: %s\n", duration)
-			fmt.Printf("Raw Ollama Response: %s\n", responseText)
-		}
+// It uses a 3-tier retry strategy:
+//  1. Normal call with JSON schema enforcement
+//  2. Self-correction retry including the invalid response and parse error
+//  3. Fallback with simplified prompt and basic JSON format
+func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output string, exitCode int, envCtx EnvironmentContext) (*Correction, error) {
+	systemPrompt := SystemPrompt(envCtx)
+	userPrompt := UserPrompt(command, output, exitCode, envCtx.CWD)
 
-		if responseText == "" {
-			return nil, fmt.Errorf("empty response from Ollama")
+	// Tier 1: Normal call with schema-enforced structured output.
+	raw, err := p.callLLM(ctx, systemPrompt, userPrompt, CorrectionSchema())
+	if err != nil {
+		// If schema format is rejected (old Ollama), skip to tier 3 with plain JSON.
+		if strings.Contains(err.Error(), "cannot unmarshal") || strings.Contains(err.Error(), "format") {
+			return p.fallbackCorrection(ctx, command, output, exitCode)
 		}
-
-		var correction Correction
-		// Extract the JSON part of the response, as the model may include other text.
-		jsonResponse := extractJSON(responseText)
-		if jsonResponse == "" {
-			return nil, fmt.Errorf("no valid JSON found in the response from Ollama")
-		}
-
-		if err := json.Unmarshal([]byte(jsonResponse), &correction); err != nil {
-			// If the JSON is malformed, also treat it as a failure.
-			return nil, fmt.Errorf("failed to unmarshal JSON from Ollama response: %w", err)
-		}
-
-		// Success!
-		return &correction, nil
+		return nil, fmt.Errorf("tier 1 LLM call failed: %w", err)
 	}
 
-	// First attempt with the standard prompt.
-	prompt := buildPrompt(command, output, exitCode)
-	correction, err := attempt(prompt)
-	if err == nil && correction != nil && correction.CorrectedCommand != "" {
-		return correction, nil // Success on the first try.
-	}
-	if err != nil && verbose {
-		fmt.Printf("First attempt failed with error: %v\n", err)
+	correction, parseErr := parseCorrection(raw)
+	if parseErr == nil && isValidCorrection(correction) {
+		return correction, nil
 	}
 
-	// If the first attempt failed (or returned an empty correction), retry with a more insistent prompt.
-	prompt = buildRetryPrompt(command, output, exitCode)
-	correction, err = attempt(prompt)
-	if err == nil && correction != nil && correction.CorrectedCommand != "" {
-		return correction, nil // Success on the second try.
-	}
-	if err != nil && verbose {
-		fmt.Printf("Second attempt failed with error: %v\n", err)
+	if config.DebugLevel(p.cfg.DebugLevel) >= config.DebugLevelBasic {
+		fmt.Printf("Tier 1 failed (parse error: %v), retrying with self-correction...\n", parseErr)
 	}
 
-	// If both attempts fail, return a clear error message to the user.
-	return nil, fmt.Errorf("the language model did not return a valid correction after two attempts")
+	// Tier 2: Self-correction — tell the model what went wrong.
+	retryPrompt := RetryPrompt(userPrompt, raw, parseErr.Error())
+	raw, err = p.callLLM(ctx, systemPrompt, retryPrompt, CorrectionSchema())
+	if err != nil {
+		return nil, fmt.Errorf("tier 2 LLM call failed: %w", err)
+	}
+
+	correction, parseErr = parseCorrection(raw)
+	if parseErr == nil && isValidCorrection(correction) {
+		return correction, nil
+	}
+
+	if config.DebugLevel(p.cfg.DebugLevel) >= config.DebugLevelBasic {
+		fmt.Printf("Tier 2 failed (parse error: %v), falling back to simplified prompt...\n", parseErr)
+	}
+
+	return p.fallbackCorrection(ctx, command, output, exitCode)
 }
 
-func (p *OllamaProvider) getCorrectionText(ctx context.Context, prompt string) (string, int, time.Duration, error) {
+// fallbackCorrection runs tier 3 with basic JSON format (no schema).
+func (p *OllamaProvider) fallbackCorrection(ctx context.Context, command, output string, exitCode int) (*Correction, error) {
+	fallbackUser := FallbackPrompt(command, output, exitCode)
+	raw, err := p.callLLM(ctx, "", fallbackUser, json.RawMessage(`"json"`))
+	if err != nil {
+		return nil, fmt.Errorf("tier 3 LLM call failed: %w", err)
+	}
+
+	jsonStr := extractJSON(raw)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("tier 3 fallback: no valid JSON found in response")
+	}
+
+	correction, parseErr := parseCorrection(jsonStr)
+	if parseErr != nil {
+		return nil, fmt.Errorf("tier 3 fallback: failed to parse correction: %w", parseErr)
+	}
+
+	return correction, nil
+}
+
+// callLLM sends a single generation request to Ollama with a 60-second context timeout.
+func (p *OllamaProvider) callLLM(ctx context.Context, systemPrompt, userPrompt string, format json.RawMessage) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	stream := false
 	req := &api.GenerateRequest{
-		Model:  p.model,
-		Prompt: prompt,
+		Model:  p.cfg.OllamaModel,
+		Prompt: userPrompt,
+		System: systemPrompt,
+		Format: format,
 		Stream: &stream,
 		Options: map[string]interface{}{
 			"temperature": 0,
@@ -133,46 +140,33 @@ func (p *OllamaProvider) getCorrectionText(ctx context.Context, prompt string) (
 	}
 
 	var responseText string
-	var evalCount int
-	var evalDuration time.Duration
 	respFunc := func(resp api.GenerateResponse) error {
 		responseText = resp.Response
-		evalCount = resp.EvalCount
-		evalDuration = resp.EvalDuration
 		return nil
 	}
 
 	if err := p.client.Generate(ctx, req, respFunc); err != nil {
-		return "", 0, 0, fmt.Errorf("ollama API error: %w", err)
+		return "", fmt.Errorf("ollama API error: %w", err)
 	}
 
 	// Check if the response is HTML, which might indicate a captive portal or proxy error.
 	if strings.HasPrefix(strings.TrimSpace(responseText), "<!DOCTYPE html>") {
-		return "", 0, 0, fmt.Errorf("received an HTML response instead of JSON. Check for captive portals or network proxy issues")
+		return "", fmt.Errorf("received an HTML response instead of JSON. Check for captive portals or network proxy issues")
 	}
 
-	return responseText, evalCount, evalDuration, nil
+	return responseText, nil
 }
 
-// buildPrompt constructs the initial prompt for the LLM.
-func buildPrompt(command, output string, exitCode int) string {
-	return fmt.Sprintf(
-		`You are a command-line expert. A user's command failed.
-	           - Command: %s
-	           - Exit Code: %d
-	           - Command Output: %s
+func parseCorrection(raw string) (*Correction, error) {
+	var correction Correction
+	if err := json.Unmarshal([]byte(raw), &correction); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal correction: %w", err)
+	}
+	return &correction, nil
+}
 
-	           Analyze the command, exit code, and output. An exit code of 127 typically means "command not found".
-	           Your response MUST be a single, raw JSON object with two keys: "corrected_command" and "explanation".
-	           Do NOT include any other text, markdown, or conversational filler.
-
-	           Example Response:
-	           {
-	             "corrected_command": "ls -a",
-	             "explanation": "The command 'lsa' was likely a typo for 'ls'."
-	           }`,
-		command, exitCode, output,
-	)
+func isValidCorrection(c *Correction) bool {
+	return c != nil && c.CorrectedCommand != nil && *c.CorrectedCommand != ""
 }
 
 // extractJSON finds and returns the JSON part of a string.
@@ -183,18 +177,4 @@ func extractJSON(s string) string {
 		return ""
 	}
 	return s[start : end+1]
-}
-
-// buildRetryPrompt constructs a more insistent prompt for the LLM.
-func buildRetryPrompt(command, output string, exitCode int) string {
-	return fmt.Sprintf(
-		`Your previous response was not valid JSON. You MUST try again.
-	           The user's command was: %s
-	           It failed with exit code: %d
-	           The command output was: %s
-
-	           Provide a direct JSON object response with the keys "corrected_command" and "explanation".
-	           DO NOT write any text other than the JSON object itself.`,
-		command, exitCode, output,
-	)
 }

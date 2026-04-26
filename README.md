@@ -1,118 +1,170 @@
-# PFS - Please Find Solution
+# PFS — Please Find Solution
 
-`PFS` is a command-line tool that diagnoses and corrects your last failed shell command using a local or hosted Large Language Model (LLM) powered by Ollama.
+Fix failed shell commands with a local LLM.
 
-When you run a command that results in an error (i.e., has a non-zero exit code), simply type `pfs`. The tool will analyze the failed command and provide an explanation of the error and a corrected command. You can then choose to execute the corrected command instantly.
+PFS is a CLI tool that diagnoses and corrects failed shell commands using Ollama. It runs entirely on your machine. No data leaves, no API keys needed, no cloud dependency.
 
 ## Features
 
-- **Local First:** Works entirely with your local Ollama models, ensuring privacy and offline capability.
-- **Intelligent Correction:** Leverages LLMs to understand the context of your error and provide accurate fixes.
-- **Interactive Workflow:** Explains the error and prompts for confirmation before executing any command.
-- **Reliable Capture:** A robust shell function ensures that the command, its output, and exit code are all captured correctly for analysis.
+- **Privacy-first**: Runs entirely on local Ollama. No data leaves your machine.
+- **Interactive TUI**: Rich terminal UI with spinner, streaming mode (Ctrl+X), and confirmation dialog.
+- **Smart confirmation**: Confidence indicators (high/medium/low) with warnings before executing low-confidence fixes.
+- **Editor mode**: Edit the suggested command in `$EDITOR` before running it.
+- **3 shells**: Bash, Zsh, and Fish wrappers with reliable command capture via hooks.
+- **No dependencies**: No jq, no temp files, no external tools. Just Go and Ollama.
+- **Direct eval pattern**: Corrected command goes to stdout, shell evals it. Same proven approach as thefuck.
+- **Structured output**: JSON schema enforcement with 3-tier retry for reliable LLM responses.
 
 ## Requirements
 
-- **Go 1.22+**: For building the application.
-- **jq**: For safely handling command output in the shell wrapper. You can install it with your system's package manager (e.g., `sudo dnf install jq`, `sudo apt-get install jq`, `brew install jq`).
-- **ollama**: The LLM that application talks with. After installing, ollama must serving (`ollama serve &`) and at least 1 model is downloaded to your machine (`ollama pull deepseek-r1:1.5b`).
+- **Go 1.22+** (for building)
+- **Ollama** running locally with at least one model pulled
+
+Recommended model: `llama3.2` or larger for best results. `deepseek-r1:1.5b` works but gives lower quality suggestions.
+
+```bash
+ollama pull llama3.2
+```
 
 ## Installation
 
-### 1. Clone the Repository
+Clone and build:
 
 ```bash
 git clone https://github.com/tatlilimon/PFS.git
 cd PFS
+make build
+sudo make install
 ```
 
-### 2. Build the Binary
-Build the binary and move the  binary to a directory in your system's `PATH`.
-
+Or manually:
 
 ```bash
-go build -o /usr/local/bin/pfs ./cmd/
+go build -ldflags "-X main.Version=$(git describe --tags --always)" -o pfs ./cmd/
+sudo cp pfs /usr/local/bin/
 ```
-
-### 3. Install the Binary
-
-
-```bash
-sudo mv pfs /usr/local/bin/
-```
-
-## Configuration
-
-`PFS` uses a `.env` file in your home directory to store your Ollama settings.
-
-### 1. Create the Configuration File
-
-Copy the provided template to `~/.pfs.env`.
-
-```bash
-cp .env.template ~/.pfs.env
-```
-
-### 2. Edit the Configuration
-
-Open the file and set the `OLLAMA_BASE_URL` for your Ollama instance and the `OLLAMA_MODEL` you wish to use.
-
-```bash
-nano ~/.pfs.env
-```
-
-### 3. Choosing a Model
-
-The quality of the command correction depends heavily on the model you choose. For best results, use a model that is specifically fine-tuned for code or command-line instructions.
 
 ## Shell Setup
 
-To make `PFS` work, you need to source the provided wrapper script in your shell's startup file (e.g., `.bashrc`, `.zshrc`).
-
-### 1. Add the Wrapper to Your Shell Configuration
-
-Open your shell's configuration file:
-```bash
-# For Bash
-nano ~/.bashrc
-
-# For Zsh
-nano ~/.zshrc
-```
-
-Add the following line to the end of the file. Make sure to use the actual absolute path to the cloned repository.
+### Quick setup
 
 ```bash
-source /path/to/your/PFS/pfs_wrapper.sh
+pfs setup
 ```
 
-### 2. Reload Your Shell
+This prints the right source line for your current shell.
 
-For the changes to take effect, either restart your terminal or source your configuration file:
+### Manual setup
+
+Add the wrapper to your shell config.
+
+**Zsh** (`~/.zshrc`):
+```bash
+source /path/to/PFS/shell/pfs.zsh
+```
+
+**Bash** (`~/.bashrc`):
+```bash
+source /path/to/PFS/shell/pfs.bash
+```
+
+**Fish** (`~/.config/fish/config.fish`):
+```bash
+source /path/to/PFS/shell/pfs.fish
+```
+
+Then reload your shell:
 
 ```bash
-# For Bash
-source ~/.bashrc
-
-# For Zsh
-source ~/.zshrc
+source ~/.zshrc   # or ~/.bashrc, or restart fish
 ```
 
-## How to Use
+## Usage
 
-1.  Run any shell command.
-2.  If it fails, simply type `pfs` and press Enter.
-3.  The tool will provide an explanation and a corrected command.
-4.  Press `y` and Enter to execute the new command, or `n` to abort.
+The basic workflow:
 
-## Debugging
+```
+$ lsa -l
+zsh: lsa: command not found...
 
-`PFS` provides a `--verbose` flag for debugging purposes, which provides detailed output about the interaction with the Ollama model.
+$ pfs
+```
 
-Example:
+PFS reads the failed command, its exit code, and output. It sends them to Ollama, gets a diagnosis and fix, then shows a TUI with the corrected command. You choose what to do.
+
+### Subcommands
+
+| Command | Description |
+|---|---|
+| `pfs` | Fix the last failed command |
+| `pfs explain` | Explain what went wrong (no fix, no execution) |
+| `pfs config get <key>` | View a config value |
+| `pfs config set <key> <value>` | Set a config value |
+| `pfs setup` | Show shell integration instructions |
+| `pfs --version` | Print version |
+| `pfs --format json` | Machine-readable JSON output (no TUI) |
+
+### TUI keybindings
+
+| Key | Action |
+|---|---|
+| `r` | Run the corrected command |
+| `e` | Edit in `$EDITOR` before running |
+| `x` or `q` | Dismiss |
+| `Ctrl+X` | Toggle streaming mode mid-request |
+| `Ctrl+C` | Cancel |
+
+## Configuration
+
+Config file: `~/.config/pfs/config.yaml` (XDG standard)
+
+Defaults:
+
+```yaml
+ollama_base_url: http://localhost:11434
+ollama_model: llama3.2
+offline_mode: true
+debug_level: 0
+```
+
+CLI configuration:
+
 ```bash
-pfs --verbose
+pfs config get ollama_model              # → llama3.2
+pfs config set ollama_model codellama    # persists to config.yaml
+pfs config set ollama_base_url http://192.168.1.100:11434
 ```
+
+Config keys: `ollama_base_url`, `ollama_model`, `offline_mode`, `debug_level`
+
+If `~/.pfs.env` exists from an old installation, PFS auto-migrates it to YAML on first run.
+
+## How It Works
+
+1. Shell wrapper captures the command, exit code, and pipestatus via hooks (preexec/precmd)
+2. `pfs` reads the captured env vars, calls Ollama with structured prompts and JSON schema
+3. 3-tier retry: schema enforcement, then self-correction, then fallback
+4. TUI displays the result on stderr; user confirms
+5. Corrected command prints to stdout; shell evals it
+
+## Architecture
+
+```
+cmd/                # CLI entry point (Cobra commands)
+internal/config/    # YAML config, migration from legacy .pfs.env
+internal/llm/       # Ollama client, prompts, JSON schema, retry logic
+internal/tui/       # Bubbletea v2 TUI: spinner, streaming, confirmation
+shell/              # Shell wrappers (bash, zsh, fish)
+```
+
+Communication between shell wrapper and Go binary uses env vars: `PFS_CMD`, `PFS_EXIT`, `PFS_OUTPUT`, `PFS_CWD`, `PFS_SHELL`. The corrected command goes to stdout, TUI output goes to stderr.
+
+Exit codes: 0 success, 1 error, 2 LLM error, 3 no fix, 4 ambiguous, 5 usage.
+
+## Contributing
+
+PRs and issues welcome. Run `make test` before submitting.
 
 ## Feel Free to Contribute This Project!
-You can help me to developing this app by opening a pull request or issue.
+
+You can help develop this app by opening a pull request or issue.
