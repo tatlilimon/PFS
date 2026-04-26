@@ -66,6 +66,10 @@ func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output stri
 	// Tier 1: Normal call with schema-enforced structured output.
 	raw, err := p.callLLM(ctx, systemPrompt, userPrompt, CorrectionSchema())
 	if err != nil {
+		// If schema format is rejected (old Ollama), skip to tier 3 with plain JSON.
+		if strings.Contains(err.Error(), "cannot unmarshal") || strings.Contains(err.Error(), "format") {
+			return p.fallbackCorrection(ctx, command, output, exitCode)
+		}
 		return nil, fmt.Errorf("tier 1 LLM call failed: %w", err)
 	}
 
@@ -94,20 +98,23 @@ func (p *OllamaProvider) GetCorrection(ctx context.Context, command, output stri
 		fmt.Printf("Tier 2 failed (parse error: %v), falling back to simplified prompt...\n", parseErr)
 	}
 
-	// Tier 3: Fallback — simplified prompt, basic JSON format (no schema).
+	return p.fallbackCorrection(ctx, command, output, exitCode)
+}
+
+// fallbackCorrection runs tier 3 with basic JSON format (no schema).
+func (p *OllamaProvider) fallbackCorrection(ctx context.Context, command, output string, exitCode int) (*Correction, error) {
 	fallbackUser := FallbackPrompt(command, output, exitCode)
-	raw, err = p.callLLM(ctx, "", fallbackUser, json.RawMessage(`"json"`))
+	raw, err := p.callLLM(ctx, "", fallbackUser, json.RawMessage(`"json"`))
 	if err != nil {
 		return nil, fmt.Errorf("tier 3 LLM call failed: %w", err)
 	}
 
-	// Use extractJSON as safety net for tier 3 parsing.
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
 		return nil, fmt.Errorf("tier 3 fallback: no valid JSON found in response")
 	}
 
-	correction, parseErr = parseCorrection(jsonStr)
+	correction, parseErr := parseCorrection(jsonStr)
 	if parseErr != nil {
 		return nil, fmt.Errorf("tier 3 fallback: failed to parse correction: %w", parseErr)
 	}
