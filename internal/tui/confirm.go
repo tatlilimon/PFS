@@ -18,8 +18,22 @@ const (
 	ConfirmDismiss
 )
 
+type editorFinishedMsg struct{ err error }
+
+func openInEditorCmd(tmpFile string) tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	c := exec.Command(editor, tmpFile)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorFinishedMsg{err: err}
+	})
+}
+
 // OpenInEditor opens the command in $EDITOR (or vi) for editing.
 // It creates a secure temp file, runs the editor, and reads back the result.
+// OpenInEditor is used only in non-interactive mode (piped/non-TTY).
 func OpenInEditor(command string) (string, error) {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -58,6 +72,34 @@ func OpenInEditor(command string) (string, error) {
 	return strings.TrimSpace(string(modified)), nil
 }
 
+func createEditTempFile(command string) (string, error) {
+	f, err := os.CreateTemp("", "pfs-*.sh")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if err := os.Chmod(f.Name(), 0600); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+
+	if _, err := f.WriteString(command); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func readEditResult(path string) (string, error) {
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func (m Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle escape via code check (String() may vary by terminal)
 	if msg.Code == tea.KeyEscape && msg.Mod == 0 {
@@ -73,9 +115,16 @@ func (m Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "e", "E":
 		if m.correction != nil && m.correction.CorrectedCommand != nil {
-			m.WantsEdit = true
-			m.CorrectedOutput = *m.correction.CorrectedCommand
-			return m, tea.Quit
+			cmd := *m.correction.CorrectedCommand
+			tmpFile, err := createEditTempFile(cmd)
+			if err != nil {
+				m.state = StateError
+				m.err = fmt.Errorf("failed to create temp file: %w", err)
+				return m, tea.Quit
+			}
+			m.editTmpFile = tmpFile
+			m.CorrectedOutput = cmd
+			return m, openInEditorCmd(tmpFile)
 		}
 	case "x", "X", "q":
 		m.CorrectedOutput = ""

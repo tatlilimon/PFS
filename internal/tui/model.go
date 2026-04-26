@@ -41,6 +41,7 @@ type Model struct {
 
 	CorrectedOutput string
 	WantsEdit       bool
+	editTmpFile     string
 
 	styles Styles
 	width  int
@@ -149,6 +150,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = StateResult
 		}
 		return m, nil
+	case editorFinishedMsg:
+		if msg.err != nil {
+			m.state = StateError
+			m.err = fmt.Errorf("editor error: %w", msg.err)
+			if m.editTmpFile != "" {
+				os.Remove(m.editTmpFile)
+				m.editTmpFile = ""
+			}
+			return m, tea.Quit
+		}
+		if m.editTmpFile != "" {
+			edited, readErr := readEditResult(m.editTmpFile)
+			m.editTmpFile = ""
+			if readErr != nil {
+				m.state = StateError
+				m.err = fmt.Errorf("failed to read edited file: %w", readErr)
+				return m, tea.Quit
+			}
+			m.CorrectedOutput = edited
+		}
+		return m, tea.Quit
 	default:
 		return m, nil
 	}

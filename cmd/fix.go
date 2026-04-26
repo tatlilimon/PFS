@@ -74,14 +74,6 @@ func runInteractive(cmd *cobra.Command, cfg *config.Config, envCtx llm.Environme
 	}
 
 	correctedOutput := finalModel.GetCorrectedOutput()
-	if finalModel.WantsEdit && correctedOutput != "" {
-		edited, editErr := tui.OpenInEditor(correctedOutput)
-		if editErr != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Editor error: %v\n", editErr)
-			return exitCode(ExitError)
-		}
-		correctedOutput = edited
-	}
 
 	// stdout is captured by the shell wrapper — corrected command ONLY
 	if correctedOutput != "" {

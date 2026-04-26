@@ -33,7 +33,6 @@ func TestConfirmRun(t *testing.T) {
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
 	assert.Equal(t, "git push --fixed", updatedM.CorrectedOutput)
-	assert.False(t, updatedM.WantsEdit)
 	assert.NotNil(t, cmd)
 }
 
@@ -53,9 +52,13 @@ func TestConfirmEdit(t *testing.T) {
 
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
-	assert.True(t, updatedM.WantsEdit)
 	assert.Equal(t, "git push --fixed", updatedM.CorrectedOutput)
+	assert.NotEmpty(t, updatedM.editTmpFile)
 	assert.NotNil(t, cmd)
+
+	_, statErr := os.Stat(updatedM.editTmpFile)
+	assert.NoError(t, statErr, "temp file should exist")
+	os.Remove(updatedM.editTmpFile)
 }
 
 func TestConfirmEdit_UpperCase(t *testing.T) {
@@ -64,8 +67,9 @@ func TestConfirmEdit_UpperCase(t *testing.T) {
 
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
-	assert.True(t, updatedM.WantsEdit)
+	assert.NotEmpty(t, updatedM.editTmpFile)
 	assert.NotNil(t, cmd)
+	os.Remove(updatedM.editTmpFile)
 }
 
 func TestConfirmDismiss(t *testing.T) {
@@ -75,7 +79,6 @@ func TestConfirmDismiss(t *testing.T) {
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
 	assert.Equal(t, "", updatedM.CorrectedOutput)
-	assert.False(t, updatedM.WantsEdit)
 	assert.NotNil(t, cmd)
 }
 
