@@ -56,5 +56,5 @@ pfs() {
     export PFS_SHELL="zsh"
 
     local corrected
-    corrected="$(command pfs --fix "$@")" && eval "$corrected"
+    corrected="$(command pfs "$@")" && eval "$corrected"
 }

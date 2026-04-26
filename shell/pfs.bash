@@ -78,5 +78,5 @@ pfs() {
 
     # Direct eval pattern: Go binary prints corrected command to stdout.
     local corrected
-    corrected="$(command pfs --fix "$@")" && eval "$corrected"
+    corrected="$(command pfs "$@")" && eval "$corrected"
 }

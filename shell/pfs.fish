@@ -55,7 +55,7 @@ function pfs
     set -l corrected (env PFS_CMD="$PFS_CMD" PFS_EXIT="$PFS_EXIT" \
         PFS_PIPESTATUS="$PFS_PIPESTATUS" PFS_OUTPUT="" \
         PFS_CWD="$PFS_CWD" PFS_SHELL="fish" \
-        command pfs --fix $argv)
+        command pfs $argv)
     if test -n "$corrected"
         eval $corrected
     end
