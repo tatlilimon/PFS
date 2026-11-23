@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -88,4 +89,11 @@ func TestCorrectionSchemaValidJSON(t *testing.T) {
 	enum, ok := confidence["enum"].([]interface{})
 	assert.True(t, ok, "confidence should have enum")
 	assert.ElementsMatch(t, []interface{}{"high", "medium", "low"}, enum)
+}
+
+func TestSanitizeOutputKeepsUTF8Valid(t *testing.T) {
+	out := SanitizeOutput(strings.Repeat("ş", 100), 51)
+	assert.True(t, utf8.ValidString(out))
+	assert.Contains(t, out, "[...truncated]")
+	assert.LessOrEqual(t, len(out), 51)
 }
