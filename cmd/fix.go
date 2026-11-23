@@ -63,6 +63,20 @@ func readInvocation(cmd *cobra.Command) (invocation, error) {
 	return inv, nil
 }
 
+// loadConfig loads the config and applies -v/-vv, which raise debug_level
+// for this run (diagnostics go to stderr).
+func loadConfig(cmd *cobra.Command) (*config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Config error: %v\n", err)
+		return nil, exitCode(ExitError)
+	}
+	if v := min(verbose, int(config.DebugLevelDetailed)); v > cfg.DebugLevel {
+		cfg.DebugLevel = v
+	}
+	return cfg, nil
+}
+
 func environment(inv invocation) llm.EnvironmentContext {
 	return llm.EnvironmentContext{
 		OS:           runtime.GOOS,
@@ -82,10 +96,9 @@ func fixRunE(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load()
+	cfg, err := loadConfig(cmd)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Config error: %v\n", err)
-		return exitCode(ExitError)
+		return err
 	}
 
 	envCtx := environment(inv)

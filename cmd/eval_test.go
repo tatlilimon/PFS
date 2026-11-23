@@ -211,3 +211,28 @@ func TestGetShellVersion_OnlyKnownShells(t *testing.T) {
 	v := getShellVersion("bash")
 	assert.NotContains(t, v, "\n")
 }
+
+func TestVerboseFlagShowsRetryDiagnosticsOnStderr(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			return
+		}
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Write([]byte(ollamaMockResponse(t, "not json")))
+			return
+		}
+		w.Write([]byte(ollamaMockResponse(t, validCorrectionJSON())))
+	}))
+	defer server.Close()
+	setupFixEnv(t, server.URL)
+
+	stdout, stderr, err := runRoot(t, "-v", "fix")
+	require.NoError(t, err)
+	assert.Equal(t, "ls -la", stdout)
+	assert.Contains(t, stderr, "Tier 1")
+
+	_, stderr, err = runRoot(t, "fix")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "Tier 1", "quiet without -v")
+}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tatlilimon/PFS/internal/config"
 	"github.com/tatlilimon/PFS/internal/llm"
 )
 
@@ -29,10 +28,9 @@ func explainRunE(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load()
+	cfg, err := loadConfig(cmd)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Config error: %v\n", err)
-		return exitCode(ExitError)
+		return err
 	}
 
 	provider, err := llm.NewOllamaProvider(cfg)
