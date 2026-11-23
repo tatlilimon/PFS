@@ -2,13 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	"charm.land/glamour/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/tatlilimon/PFS/internal/config"
@@ -39,9 +40,16 @@ type Model struct {
 	correction *llm.Correction
 	err        error
 
+	// CorrectedOutput is what the caller prints on stdout, where the shell
+	// wrapper evaluates it. It is only set by an explicit user action.
 	CorrectedOutput string
 	WantsEdit       bool
 	editTmpFile     string
+
+	// risk is the assessment of the suggested command; dangerArmed is set
+	// after the first "run" key press on a destructive command.
+	risk        llm.Risk
+	dangerArmed bool
 
 	styles Styles
 	width  int
@@ -49,6 +57,9 @@ type Model struct {
 
 	spinnerFrame int
 
+	// gen identifies the active LLM request. Results carrying another
+	// generation come from a request that was cancelled by a mode toggle.
+	gen    int
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -58,9 +69,12 @@ type Model struct {
 type spinnerTickMsg time.Time
 
 type correctionResultMsg struct {
+	gen        int
 	correction *llm.Correction
 	err        error
 }
+
+var errNoProvider = errors.New("no LLM provider configured")
 
 func NewModel(cfg *config.Config, provider *llm.OllamaProvider, envCtx llm.EnvironmentContext, command, output string, exitCode int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -87,12 +101,7 @@ func (m Model) startLLMCall() tea.Cmd {
 	if m.provider == nil {
 		return nil
 	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
-		defer cancel()
-		correction, err := m.provider.GetCorrection(ctx, m.command, m.output, m.exitCode, m.envCtx)
-		return correctionResultMsg{correction: correction, err: err}
-	}
+	return startNonStreamingCmd(m.ctx, m.provider, m.gen, m.command, m.output, m.exitCode, m.envCtx)
 }
 
 func tickSpinner() tea.Cmd {
@@ -111,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case spinnerTickMsg:
 		if m.state == StateLoading {
-			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			m.spinnerFrame = (m.spinnerFrame + 1) % len([]rune(spinnerFrames))
 			return m, tickSpinner()
 		}
 		if m.state == StateStreaming {
@@ -119,61 +128,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case streamingDoneMsg:
-		if m.state != StateStreaming {
+		if m.state != StateStreaming || msg.gen != m.gen {
 			return m, nil
 		}
-		if msg.err != nil {
-			m.state = StateError
-			m.err = msg.err
-			return m, tea.Quit
-		}
-		m.correction = msg.correction
-		if msg.correction.CorrectedCommand != nil && *msg.correction.CorrectedCommand != "" {
-			m.state = StateConfirm
-		} else {
-			m.state = StateResult
-		}
-		return m, nil
+		return m.applyResult(msg.correction, msg.err)
 	case correctionResultMsg:
-		if m.state == StateStreaming {
+		if m.state == StateStreaming || msg.gen != m.gen {
 			return m, nil
 		}
-		if msg.err != nil {
-			m.state = StateError
-			m.err = msg.err
-			return m, tea.Quit
-		}
-		m.correction = msg.correction
-		if msg.correction.CorrectedCommand != nil && *msg.correction.CorrectedCommand != "" {
-			m.state = StateConfirm
-		} else {
-			m.state = StateResult
-		}
-		return m, nil
+		return m.applyResult(msg.correction, msg.err)
 	case editorFinishedMsg:
-		if msg.err != nil {
-			m.state = StateError
-			m.err = fmt.Errorf("editor error: %w", msg.err)
-			if m.editTmpFile != "" {
-				os.Remove(m.editTmpFile)
-				m.editTmpFile = ""
-			}
-			return m, tea.Quit
-		}
-		if m.editTmpFile != "" {
-			edited, readErr := readEditResult(m.editTmpFile)
-			m.editTmpFile = ""
-			if readErr != nil {
-				m.state = StateError
-				m.err = fmt.Errorf("failed to read edited file: %w", readErr)
-				return m, tea.Quit
-			}
-			m.CorrectedOutput = edited
-		}
-		return m, tea.Quit
+		return m.handleEditorFinished(msg)
 	default:
 		return m, nil
 	}
+}
+
+// applyResult moves the model to the state that matches an LLM answer.
+func (m Model) applyResult(c *llm.Correction, err error) (tea.Model, tea.Cmd) {
+	if err == nil && c == nil {
+		err = errors.New("the model returned no answer")
+	}
+	if err == nil && c.CorrectedCommand != nil && *c.CorrectedCommand != "" {
+		if verr := llm.ValidateCommand(*c.CorrectedCommand); verr != nil {
+			err = fmt.Errorf("unsafe suggestion rejected: %w", verr)
+		}
+	}
+	if err != nil {
+		m.state = StateError
+		m.err = err
+		return m, tea.Quit
+	}
+	m.correction = c
+	m.dangerArmed = false
+	if m.hasCommand() {
+		m.state = StateConfirm
+		m.risk = llm.AssessCommand(*c.CorrectedCommand)
+	} else {
+		m.state = StateResult
+		m.risk = llm.Risk{}
+	}
+	return m, nil
+}
+
+func (m Model) hasCommand() bool {
+	return m.correction != nil && m.correction.CorrectedCommand != nil && *m.correction.CorrectedCommand != ""
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -191,8 +190,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case StateConfirm:
 		return m.handleConfirmKey(msg)
-	case StateResult, StateError:
-		if msg.String() == "x" || msg.String() == "q" {
+	case StateResult:
+		if m.hasCommand() {
+			return m.handleConfirmKey(msg)
+		}
+		fallthrough
+	case StateError:
+		if msg.String() == "x" || msg.String() == "q" || msg.Code == tea.KeyEscape {
 			m.CorrectedOutput = ""
 			return m, tea.Quit
 		}
@@ -218,7 +222,7 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) viewLoading() string {
-	frame := string(spinnerFrames[m.spinnerFrame])
+	frame := string([]rune(spinnerFrames)[m.spinnerFrame%len([]rune(spinnerFrames))])
 	spinner := m.styles.TitleStyle.Render(frame)
 	text := fmt.Sprintf("%s Analyzing command...", spinner)
 	hint := m.styles.MetadataStyle.Render("Press Ctrl+X for streaming mode")
@@ -226,47 +230,70 @@ func (m Model) viewLoading() string {
 }
 
 func (m Model) viewResult() string {
-	var b strings.Builder
+	if m.hasCommand() {
+		return m.viewConfirm()
+	}
 
+	var b strings.Builder
 	b.WriteString(m.styles.TitleStyle.Render("Diagnosis"))
 	b.WriteString("\n")
 	b.WriteString(renderMarkdown(m.correction.Diagnosis))
 	b.WriteString("\n\n")
 
 	if m.correction.Explanation != nil && *m.correction.Explanation != "" {
-		b.WriteString(m.styles.ExplanationStyle.Render(*m.correction.Explanation))
+		b.WriteString(m.styles.ExplanationStyle.Render(llm.SanitizeText(*m.correction.Explanation)))
 		b.WriteString("\n\n")
 	}
 
-	if m.correction.CorrectedCommand != nil && *m.correction.CorrectedCommand != "" {
-		cmd := *m.correction.CorrectedCommand
-		boxed := m.styles.BorderStyle.Render(m.styles.CommandStyle.Render(cmd))
-		b.WriteString(boxed)
-		b.WriteString("\n\n")
+	if len(m.correction.AlternativeCommands) > 0 {
+		b.WriteString(m.styles.TitleStyle.Render("No single fix. Possible approaches (not run):"))
+		b.WriteString("\n")
+		for _, alt := range m.correction.AlternativeCommands {
+			b.WriteString("  • " + llm.SanitizeText(alt) + "\n")
+		}
+		b.WriteString("\n")
 	}
 
 	confidenceLabel := fmt.Sprintf("Confidence: %s", strings.ToUpper(m.correction.Confidence))
 	b.WriteString(m.styles.ConfidenceStyle(m.correction.Confidence).Render(confidenceLabel))
 	b.WriteString("\n\n")
 
-	hints := m.styles.KeyHintStyle.Render("[r]") + " Run  " +
-		m.styles.KeyHintStyle.Render("[e]") + " Edit  " +
-		m.styles.KeyHintStyle.Render("[x]") + " Dismiss"
-	b.WriteString(hints)
-
+	b.WriteString(m.styles.KeyHintStyle.Render("[x]") + " Dismiss")
 	return b.String()
 }
 
 func (m Model) viewError() string {
-	errText := m.styles.ErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
-	hint := m.styles.MetadataStyle.Render("Try running: pfs setup")
-	return errText + "\n" + hint
+	errText := m.styles.ErrorStyle.Render("Error: " + llm.SanitizeText(fmt.Sprint(m.err)))
+	var editorErr *EditorError
+	var hint string
+	switch {
+	case errors.As(m.err, &editorErr):
+		hint = "Nothing was run."
+	case errors.Is(m.err, llm.ErrModelNotFound):
+		hint = "Pull the model first: ollama pull " + m.modelName()
+	case errors.Is(m.err, llm.ErrOllamaUnavailable):
+		hint = "Start Ollama with: ollama serve"
+	default:
+		hint = "Check that Ollama is running, or try running: pfs setup"
+	}
+	return errText + "\n" + m.styles.MetadataStyle.Render(hint)
+}
+
+func (m Model) modelName() string {
+	if m.config != nil && m.config.OllamaModel != "" {
+		return m.config.OllamaModel
+	}
+	return "<model>"
 }
 
 // SetCorrection delivers an LLM correction result to the model.
 func (m *Model) SetCorrection(correction *llm.Correction) {
 	m.correction = correction
 	m.state = StateResult
+	m.dangerArmed = false
+	if m.hasCommand() {
+		m.risk = llm.AssessCommand(*correction.CorrectedCommand)
+	}
 }
 
 // SetError delivers an error to the model.
@@ -294,14 +321,30 @@ func RunProgram(model Model) (Model, error) {
 
 // IsTerminal checks if stderr is a TTY.
 func IsTerminal() bool {
-	fi, err := os.Stderr.Stat()
+	return isCharDevice(os.Stderr)
+}
+
+// IsInteractive reports whether a confirmation dialog can be shown: the TUI
+// draws on stderr and reads keys from stdin, so both must be terminals.
+func IsInteractive() bool {
+	return isCharDevice(os.Stderr) && isCharDevice(os.Stdin)
+}
+
+func isCharDevice(f *os.File) bool {
+	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
+// renderMarkdown renders model-written text. Escape sequences are removed
+// first, and NO_COLOR disables markdown styling entirely.
 func renderMarkdown(text string) string {
+	text = llm.SanitizeText(text)
+	if noColor {
+		return strings.TrimSpace(text)
+	}
 	r, err := glamour.NewTermRenderer(glamour.WithEnvironmentConfig())
 	if err != nil {
 		return text
@@ -319,6 +362,16 @@ func (m Model) GetCommand() string {
 		return *m.correction.CorrectedCommand
 	}
 	return ""
+}
+
+// GetCorrection returns the LLM answer, or nil if none arrived.
+func (m Model) GetCorrection() *llm.Correction {
+	return m.correction
+}
+
+// Ambiguous reports an answer with no single fix but several possible approaches.
+func (m Model) Ambiguous() bool {
+	return m.correction != nil && !m.hasCommand() && len(m.correction.AlternativeCommands) > 0
 }
 
 // GetCorrectedOutput returns the final output for stdout after user confirmation.

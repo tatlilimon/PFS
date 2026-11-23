@@ -86,6 +86,11 @@ func normalizeCorrection(c *Correction) error {
 	return nil
 }
 
+// ValidateCommand reports whether cmd can be shown and run safely: it must fit
+// the size limit and contain no hidden or control characters (except newline
+// and tab).
+func ValidateCommand(cmd string) error { return validateCommand(cmd) }
+
 // validateCommand rejects commands that would not display exactly as they run.
 // Carriage returns, escape sequences, bidirectional overrides and zero-width
 // characters can make a terminal show one command while the shell executes

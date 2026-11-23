@@ -2,20 +2,16 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/ollama/ollama/api"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/tatlilimon/PFS/internal/config"
 	"github.com/tatlilimon/PFS/internal/llm"
 )
+
+// maxStreamDisplay bounds the text kept for the live streaming view.
+const maxStreamDisplay = 64 << 10
 
 // streamState holds mutable streaming state behind a pointer to avoid
 // copying the mutex when Model is passed by value through bubbletea's
@@ -27,149 +23,57 @@ type streamState struct {
 
 // streamingDoneMsg is sent when a streaming LLM call completes (or fails).
 type streamingDoneMsg struct {
+	gen        int
 	correction *llm.Correction
 	err        error
 }
 
-// startStreamingCmd returns a tea.Cmd that performs a streaming LLM call.
-// Tokens are written to ss.buf (mutex-protected) for incremental display
-// via the spinner tick loop. The Cmd returns streamingDoneMsg when the
-// full response is received and parsed.
+// startStreamingCmd returns a tea.Cmd that performs a streaming LLM call
+// through the provider, so the answer is validated and retried exactly like
+// a normal request. Tokens are written to ss.buf (mutex-protected) for
+// incremental display via the spinner tick loop.
 func startStreamingCmd(
 	ctx context.Context,
-	cfg *config.Config,
+	provider *llm.OllamaProvider,
 	ss *streamState,
+	gen int,
 	command, output string,
 	exitCode int,
 	envCtx llm.EnvironmentContext,
 ) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-
-		parsedURL, err := url.Parse(cfg.OllamaBaseURL)
-		if err != nil {
-			return streamingDoneMsg{err: fmt.Errorf("streaming: bad URL: %w", err)}
+		if provider == nil {
+			return streamingDoneMsg{gen: gen, err: errNoProvider}
 		}
-
-		client := api.NewClient(parsedURL, http.DefaultClient)
-
-		systemPrompt := llm.SystemPrompt(envCtx)
-		userPrompt := llm.UserPrompt(command, output, exitCode, envCtx.CWD)
-		schema := llm.CorrectionSchema()
-
-		stream := true
-		req := &api.GenerateRequest{
-			Model:  cfg.OllamaModel,
-			Prompt: userPrompt,
-			System: systemPrompt,
-			Format: schema,
-			Stream: &stream,
-			Options: map[string]interface{}{
-				"temperature": 0,
-			},
-		}
-
-		var fullResponse strings.Builder
-		respFunc := func(resp api.GenerateResponse) error {
-			token := resp.Response
-			fullResponse.WriteString(token)
-
+		correction, err := provider.GetCorrectionStream(ctx, command, output, exitCode, envCtx, func(token string) {
 			ss.mu.Lock()
-			ss.buf.WriteString(token)
+			if ss.buf.Len() < maxStreamDisplay {
+				ss.buf.WriteString(token)
+			}
 			ss.mu.Unlock()
-
-			return nil
-		}
-
-		if err := client.Generate(ctx, req, respFunc); err != nil {
-			return streamingDoneMsg{err: fmt.Errorf("streaming API error: %w", err)}
-		}
-
-		raw := fullResponse.String()
-		jsonStr := extractJSONFromStream(raw)
-		if jsonStr == "" {
-			return streamingDoneMsg{err: fmt.Errorf("streaming: no valid JSON in response")}
-		}
-
-		var correction llm.Correction
-		if err := json.Unmarshal([]byte(jsonStr), &correction); err != nil {
-			return streamingDoneMsg{err: fmt.Errorf("streaming: parse error: %w", err)}
-		}
-
-		return streamingDoneMsg{correction: &correction}
+		})
+		return streamingDoneMsg{gen: gen, correction: correction, err: err}
 	}
 }
 
 // startNonStreamingCmd returns a tea.Cmd that performs a non-streaming LLM
-// call. Used when toggling back from streaming to spinner mode. Returns
-// correctionResultMsg so the existing handler in Update processes it.
+// call. Used for the first request and when toggling back from streaming to
+// spinner mode. Returns correctionResultMsg.
 func startNonStreamingCmd(
 	ctx context.Context,
-	cfg *config.Config,
+	provider *llm.OllamaProvider,
+	gen int,
 	command, output string,
 	exitCode int,
 	envCtx llm.EnvironmentContext,
 ) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-
-		parsedURL, err := url.Parse(cfg.OllamaBaseURL)
-		if err != nil {
-			return correctionResultMsg{err: fmt.Errorf("non-streaming: bad URL: %w", err)}
+		if provider == nil {
+			return correctionResultMsg{gen: gen, err: errNoProvider}
 		}
-
-		client := api.NewClient(parsedURL, http.DefaultClient)
-
-		systemPrompt := llm.SystemPrompt(envCtx)
-		userPrompt := llm.UserPrompt(command, output, exitCode, envCtx.CWD)
-		schema := llm.CorrectionSchema()
-
-		stream := false
-		req := &api.GenerateRequest{
-			Model:  cfg.OllamaModel,
-			Prompt: userPrompt,
-			System: systemPrompt,
-			Format: schema,
-			Stream: &stream,
-			Options: map[string]interface{}{
-				"temperature": 0,
-			},
-		}
-
-		var responseText string
-		respFunc := func(resp api.GenerateResponse) error {
-			responseText = resp.Response
-			return nil
-		}
-
-		if err := client.Generate(ctx, req, respFunc); err != nil {
-			return correctionResultMsg{err: fmt.Errorf("non-streaming API error: %w", err)}
-		}
-
-		jsonStr := extractJSONFromStream(responseText)
-		if jsonStr == "" {
-			return correctionResultMsg{err: fmt.Errorf("non-streaming: no valid JSON in response")}
-		}
-
-		var correction llm.Correction
-		if err := json.Unmarshal([]byte(jsonStr), &correction); err != nil {
-			return correctionResultMsg{err: fmt.Errorf("non-streaming: parse error: %w", err)}
-		}
-
-		return correctionResultMsg{correction: &correction}
+		correction, err := provider.GetCorrection(ctx, command, output, exitCode, envCtx)
+		return correctionResultMsg{gen: gen, correction: correction, err: err}
 	}
-}
-
-// extractJSONFromStream extracts the first JSON object from a string.
-func extractJSONFromStream(s string) string {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start == -1 || end == -1 || start > end {
-		return ""
-	}
-	return s[start : end+1]
 }
 
 // handleCtrlX toggles between spinner (StateLoading) and streaming
@@ -181,11 +85,12 @@ func (m Model) handleCtrlX() (tea.Model, tea.Cmd) {
 		if m.cancel != nil {
 			m.cancel()
 		}
+		m.gen++
 		m.ctx, m.cancel = context.WithCancel(context.Background())
 		m.stream = &streamState{}
 		m.state = StateStreaming
 		return m, startStreamingCmd(
-			m.ctx, m.config, m.stream,
+			m.ctx, m.provider, m.stream, m.gen,
 			m.command, m.output, m.exitCode, m.envCtx,
 		)
 
@@ -193,15 +98,17 @@ func (m Model) handleCtrlX() (tea.Model, tea.Cmd) {
 		if m.cancel != nil {
 			m.cancel()
 		}
+		m.gen++
 		m.ctx, m.cancel = context.WithCancel(context.Background())
 		m.stream = nil
 		m.state = StateLoading
 		return m, startNonStreamingCmd(
-			m.ctx, m.config,
+			m.ctx, m.provider, m.gen,
 			m.command, m.output, m.exitCode, m.envCtx,
 		)
 
 	default:
+		m.CorrectedOutput = ""
 		return m, tea.Quit
 	}
 }
@@ -221,7 +128,8 @@ func (m Model) viewStreaming() string {
 	hint := m.styles.MetadataStyle.Render("Press Ctrl+X to switch back to spinner")
 
 	if text == "" {
-		frame := string(spinnerFrames[m.spinnerFrame])
+		frames := []rune(spinnerFrames)
+		frame := string(frames[m.spinnerFrame%len(frames)])
 		return m.styles.TitleStyle.Render(frame) + " Streaming response...\n" + hint
 	}
 
