@@ -68,7 +68,9 @@ func Load() (*Config, error) {
 	}
 
 	if data, err := os.ReadFile(path); err == nil {
-		cfg := &Config{}
+		// Start from the defaults so a file that sets only some keys keeps
+		// working values for the others.
+		cfg := defaultConfig()
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 		}

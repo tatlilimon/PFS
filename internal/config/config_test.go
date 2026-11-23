@@ -215,3 +215,22 @@ func TestYAMLRoundtrip(t *testing.T) {
 	assert.Equal(t, original.OfflineMode, restored.OfflineMode)
 	assert.Equal(t, original.DebugLevel, restored.DebugLevel)
 }
+
+func TestLoadPartialFileKeepsDefaults(t *testing.T) {
+	tmpDir := setupTestDir(t)
+	dir := filepath.Join(tmpDir, appName)
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("ollama_model: codellama\n"), 0644))
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "codellama", cfg.OllamaModel)
+	assert.Equal(t, "http://localhost:11434", cfg.OllamaBaseURL, "unset keys keep their defaults")
+	assert.True(t, cfg.OfflineMode)
+}
+
+func TestTestsUseScratchHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Contains(t, home, "pfs-config-test-home-")
+}
