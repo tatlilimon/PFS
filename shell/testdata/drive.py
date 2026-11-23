@@ -2,17 +2,23 @@
 
 Usage: python3 -I drive.py '<argv json>' '<steps json>' <timeout seconds>
 
-Each step is a list of input lines that are typed together; after a step the
-driver types a sync command and waits until its output appears, so the next
-step starts only when the shell is idle. The whole terminal transcript is
+Each step is a list of items typed in order. A string item is a line (sent
+with Enter). An object item {"expect": text, "keys": keys} waits until text
+appears in the output produced after the previous expectation, then sends
+keys without Enter (for driving the pfs TUI). After a step the driver types a
+sync command and waits until its output appears, so the next step starts only
+when the shell is idle. The whole terminal transcript is
 printed on stdout at the end. Used by wrapper_test.go; stdlib only.
 """
 
+import fcntl
 import json
 import os
 import pty
 import select
+import struct
 import sys
+import termios
 import time
 
 
@@ -24,11 +30,14 @@ def main() -> int:
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(argv[0], argv)
+    # A real terminal has a size; without one, full-screen programs draw nothing.
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
 
     buf = bytearray()
+    pos = 0  # expectations only match output after this offset
 
-    def read_until(token: bytes, deadline: float) -> None:
-        while token not in buf:
+    def read_until(token: bytes, deadline: float, start: int = 0) -> int:
+        while buf.find(token, start) < 0:
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise TimeoutError("timed out waiting for %r" % token)
@@ -41,6 +50,7 @@ def main() -> int:
                 if not data:
                     raise EOFError("shell exited while waiting for %r" % token)
                 buf.extend(data)
+        return buf.find(token, start) + len(token)
 
     status = 0
     try:
@@ -55,10 +65,21 @@ def main() -> int:
             read_until(("SYNC_%d_DONE" % sync).encode(), time.time() + timeout)
 
         settle()  # the shell has started and sourced its rc file
-        for lines in steps:
-            for line in lines:
-                os.write(fd, line.encode() + b"\r")
+        for items in steps:
+            drove_tui = False
+            for item in items:
+                if isinstance(item, dict):
+                    pos = read_until(item["expect"].encode(), time.time() + timeout, pos)
+                    os.write(fd, item.get("keys", "").encode())
+                    drove_tui = True
+                else:
+                    os.write(fd, item.encode() + b"\r")
+            if drove_tui:
+                # Typing ahead would go to the TUI, not the shell: wait until
+                # the program has exited and the prompt is back.
+                read_until(b"PFSPROMPT> ", time.time() + timeout, pos)
             settle()
+            pos = len(buf)
         os.write(fd, b"exit\r")
         deadline = time.time() + timeout
         while time.time() < deadline:

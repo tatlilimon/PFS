@@ -127,17 +127,7 @@ func (s *session) run(argv []string, steps [][]string) string {
 	stepsJSON, _ := json.Marshal(steps)
 	cmd := exec.Command("python3", "-I", driver, string(argvJSON), string(stepsJSON), "15")
 	cmd.Dir = s.home
-	cmd.Env = []string{
-		"PATH=" + s.bin + ":" + os.Getenv("PATH"),
-		"HOME=" + s.home,
-		"XDG_CONFIG_HOME=" + filepath.Join(s.home, ".config"),
-		"XDG_DATA_HOME=" + filepath.Join(s.home, ".local", "share"),
-		"FAKEPFS_DIR=" + s.dir,
-		"FAKEPFS_WRAPPERS=" + wd,
-		"TERM=dumb",
-		"LANG=C.UTF-8",
-		"LC_ALL=C.UTF-8",
-	}
+	cmd.Env = s.env(wd)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -146,6 +136,25 @@ func (s *session) run(argv []string, steps [][]string) string {
 		s.t.Fatalf("driver failed: %v\n%s\ntranscript:\n%s", err, stderr.String(), transcript)
 	}
 	return transcript
+}
+
+// env is the environment for the driven shell: a scratch HOME and XDG dirs,
+// the fake (or freshly built) pfs first on PATH, and nothing else inherited
+// that could load the user's own configuration.
+func (s *session) env(wrappers string) []string {
+	return []string{
+		"PATH=" + s.bin + ":" + os.Getenv("PATH"),
+		"HOME=" + s.home,
+		"XDG_CONFIG_HOME=" + filepath.Join(s.home, ".config"),
+		"XDG_DATA_HOME=" + filepath.Join(s.home, ".local", "share"),
+		"FAKEPFS_DIR=" + s.dir,
+		"FAKEPFS_WRAPPERS=" + wrappers,
+		"TERM=dumb",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"GOFLAGS=" + os.Getenv("GOFLAGS"),
+		"GOPROXY=" + os.Getenv("GOPROXY"),
+	}
 }
 
 func (s *session) writeRC(name, content string) string {
@@ -368,4 +377,3 @@ func assertEq(t *testing.T, want, got, what string) {
 		t.Errorf("%s: want %q, got %q", what, want, got)
 	}
 }
-
