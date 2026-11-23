@@ -52,26 +52,11 @@ func TestEndToEnd_RealBinaryInTerminal(t *testing.T) {
 	}
 	forEachShell(t, func(t *testing.T, sh shellCase) {
 		s := newSession(t)
-		build := exec.Command("go", "build", "-o", filepath.Join(s.bin, "pfs"), "github.com/tatlilimon/PFS/cmd")
-		if out, err := build.CombinedOutput(); err != nil {
-			t.Fatalf("build pfs: %v\n%s", err, out)
-		}
-
-		ollama := &fakeOllama{replies: []string{
+		ollama := s.realPfs(
 			correction(`echo FIXED > "$FAKEPFS_DIR/fixed"`),
 			correction(`echo NO > "$FAKEPFS_DIR/dismissed"`),
 			correction(`git reset --hard HEAD`),
-		}}
-		server := httptest.NewServer(ollama)
-		defer server.Close()
-		cfgDir := filepath.Join(s.home, ".config", "pfs")
-		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		cfg := "ollama_base_url: " + server.URL + "\nollama_model: test-model\n"
-		if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		)
 
 		transcript := s.runItems(sh.start(s, ""), [][]interface{}{
 			{"lsx-not-a-command", "pfs", expect("[r]", "r")},
@@ -95,6 +80,74 @@ func TestEndToEnd_RealBinaryInTerminal(t *testing.T) {
 			t.Errorf("want 3 requests to Ollama, got %d\n%s", served, transcript)
 		}
 	})
+}
+
+// The edit path in a real terminal: a saved edit runs, and an editor that
+// exits with an error (:cq in vim) runs nothing, not even the original.
+func TestEndToEnd_EditorInTerminal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary and drives real shells")
+	}
+	forEachShell(t, func(t *testing.T, sh shellCase) {
+		s := newSession(t)
+		s.realPfs(
+			correction(`echo ORIGINAL > "$FAKEPFS_DIR/original-1"`),
+			correction(`echo ORIGINAL > "$FAKEPFS_DIR/original-2"`),
+		)
+		save := filepath.Join(s.bin, "save-editor")
+		cancel := filepath.Join(s.bin, "cancel-editor")
+		writeExec(t, save, "#!/bin/sh\nprintf '%s\\n' 'echo EDITED > \"$FAKEPFS_DIR/edited\"' > \"$1\"\n")
+		writeExec(t, cancel, "#!/bin/sh\nexit 1\n")
+		setEditor := func(path string) string {
+			if sh.name == "fish" {
+				return "set -gx EDITOR " + path
+			}
+			return "export EDITOR=" + path
+		}
+
+		transcript := s.runItems(sh.start(s, ""), [][]interface{}{
+			{setEditor(save), "lsx-not-a-command", "pfs", expect("[e]", "e")},
+			{setEditor(cancel), "lsx-not-a-command", "pfs", expect("[e]", "e")},
+		})
+		if s.read("edited") != "EDITED\n" {
+			t.Errorf("the saved edit did not run\n%s", transcript)
+		}
+		if s.exists("original-1") || s.exists("original-2") {
+			t.Errorf("an unedited original ran\n%s", transcript)
+		}
+		if !strings.Contains(transcript, "nothing was run") {
+			t.Errorf("a cancelled edit is reported\n%s", transcript)
+		}
+	})
+}
+
+// realPfs builds the real binary into the session's PATH and points it at a
+// fake Ollama that answers with the given corrections in order.
+func (s *session) realPfs(replies ...string) *fakeOllama {
+	s.t.Helper()
+	build := exec.Command("go", "build", "-o", filepath.Join(s.bin, "pfs"), "github.com/tatlilimon/PFS/cmd")
+	if out, err := build.CombinedOutput(); err != nil {
+		s.t.Fatalf("build pfs: %v\n%s", err, out)
+	}
+	ollama := &fakeOllama{replies: replies}
+	server := httptest.NewServer(ollama)
+	s.t.Cleanup(server.Close)
+	cfgDir := filepath.Join(s.home, ".config", "pfs")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		s.t.Fatal(err)
+	}
+	cfg := "ollama_base_url: " + server.URL + "\nollama_model: test-model\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		s.t.Fatal(err)
+	}
+	return ollama
+}
+
+func writeExec(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func expect(text, keys string) map[string]string {
