@@ -75,6 +75,12 @@ func newOllamaProviderWithClient(cfg *config.Config, httpClient *http.Client) (*
 	return &OllamaProvider{client: client, cfg: cfg, debug: os.Stderr}, nil
 }
 
+// SetDebugOutput sets where retry diagnostics go when debug_level > 0. Pass
+// nil to discard them. Never pass stdout: the shell wrapper evaluates it.
+func (p *OllamaProvider) SetDebugOutput(w io.Writer) {
+	p.debug = w
+}
+
 // ModelName returns the name of the Ollama model being used.
 func (p *OllamaProvider) ModelName() string {
 	return p.cfg.OllamaModel
