@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -233,4 +234,21 @@ func TestTestsUseScratchHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	assert.Contains(t, home, "pfs-config-test-home-")
+}
+
+func TestMigrationPrintsNotice(t *testing.T) {
+	setupTestDir(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".pfs.env"), []byte("OLLAMA_MODEL=m\n"), 0644))
+
+	var notices strings.Builder
+	orig := Notices
+	Notices = &notices
+	defer func() { Notices = orig }()
+
+	_, err := Load()
+	require.NoError(t, err)
+	assert.Contains(t, notices.String(), "migrated config from")
+	assert.Contains(t, notices.String(), ".pfs.env.bak")
 }
