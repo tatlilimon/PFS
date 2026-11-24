@@ -3,13 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
-	"github.com/tatlilimon/PFS/internal/config"
 	"github.com/tatlilimon/PFS/internal/llm"
 )
 
@@ -17,26 +13,24 @@ var explainCmd = &cobra.Command{
 	Use:   "explain",
 	Short: "Explain the last command (no fix suggested)",
 	Long: `Reads environment variables set by the shell wrapper and asks
-the LLM to explain what the last command did, without suggesting a fix.`,
+the LLM to explain what the last command did, without suggesting a fix.
+Nothing is printed on stdout and nothing is run.`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: explainRunE,
 }
 
 func explainRunE(cmd *cobra.Command, args []string) error {
-	pfsCmd := os.Getenv("PFS_CMD")
-	if pfsCmd == "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "PFS requires shell integration. Run 'pfs setup' for instructions.")
-		return exitCode(ExitError)
+	if err := checkFormat(); err != nil {
+		return err
+	}
+	inv, err := readInvocation(cmd)
+	if err != nil {
+		return err
 	}
 
-	exitCodeVal, _ := strconv.Atoi(os.Getenv("PFS_EXIT"))
-	output := os.Getenv("PFS_OUTPUT")
-	cwd := os.Getenv("PFS_CWD")
-	shellName := os.Getenv("PFS_SHELL")
-
-	cfg, err := config.Load()
+	cfg, err := loadConfig(cmd)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Config error: %v\n", err)
-		return exitCode(ExitError)
+		return err
 	}
 
 	provider, err := llm.NewOllamaProvider(cfg)
@@ -44,25 +38,17 @@ func explainRunE(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.ErrOrStderr(), "LLM provider error: %v\n", err)
 		return exitCode(ExitLLMError)
 	}
+	provider.SetDebugOutput(cmd.ErrOrStderr())
 
-	envCtx := llm.EnvironmentContext{
-		OS:           runtime.GOOS,
-		Shell:        shellName,
-		Architecture: runtime.GOARCH,
-		CWD:          cwd,
-		ShellVersion: getShellVersion(shellName),
-	}
-
-	ctx := context.Background()
-	correction, err := provider.GetCorrection(ctx, pfsCmd, output, exitCodeVal, envCtx)
+	correction, err := provider.GetCorrection(context.Background(), inv.command, inv.output, inv.exitCode, environment(inv))
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "LLM error: %v\n", err)
 		return exitCode(ExitLLMError)
 	}
 
-	fmt.Fprintln(cmd.ErrOrStderr(), correction.Diagnosis)
+	fmt.Fprintln(cmd.ErrOrStderr(), llm.SanitizeText(correction.Diagnosis))
 	if correction.Explanation != nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), *correction.Explanation)
+		fmt.Fprintln(cmd.ErrOrStderr(), llm.SanitizeText(*correction.Explanation))
 	}
 
 	return nil

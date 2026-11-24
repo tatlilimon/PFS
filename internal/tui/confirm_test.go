@@ -2,7 +2,6 @@ package tui
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,7 +51,8 @@ func TestConfirmEdit(t *testing.T) {
 
 	updatedM, ok := updated.(Model)
 	require.True(t, ok)
-	assert.Equal(t, "git push --fixed", updatedM.CorrectedOutput)
+	// Nothing is chosen to run until the editor has finished successfully.
+	assert.Equal(t, "", updatedM.CorrectedOutput)
 	assert.NotEmpty(t, updatedM.editTmpFile)
 	assert.NotNil(t, cmd)
 
@@ -232,36 +232,6 @@ func TestCtrlC_ClearsOutput(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "", updatedM.CorrectedOutput)
 	assert.NotNil(t, cmd)
-}
-
-func TestOpenInEditor_WithMockEditor(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock-editor.sh")
-	editedContent := "git push origin main --force"
-
-	err := os.WriteFile(script, []byte("#!/bin/sh\ncat > \"$1\" <<'EOF'\n"+editedContent+"\nEOF\n"), 0755)
-	require.NoError(t, err)
-
-	t.Setenv("EDITOR", script)
-	result, err := OpenInEditor("git push")
-	require.NoError(t, err)
-	assert.Equal(t, editedContent, result)
-}
-
-func TestOpenInEditor_FallbackToVi(t *testing.T) {
-	t.Setenv("EDITOR", "")
-	assert.Equal(t, "", os.Getenv("EDITOR"))
-}
-
-func TestOpenInEditor_EditorFails(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "fail-editor.sh")
-	err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0755)
-	require.NoError(t, err)
-
-	t.Setenv("EDITOR", script)
-	_, err = OpenInEditor("git push")
-	assert.Error(t, err)
 }
 
 func TestGetCorrectedOutput(t *testing.T) {

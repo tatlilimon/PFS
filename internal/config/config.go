@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,6 +62,11 @@ func oldEnvPath() (string, error) {
 
 var configDir string
 
+// Notices receives one-line messages about automatic changes, such as the
+// migration of ~/.pfs.env. It is stderr by default and must never be stdout,
+// which the shell wrapper evaluates.
+var Notices io.Writer = os.Stderr
+
 func Load() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
@@ -68,7 +74,9 @@ func Load() (*Config, error) {
 	}
 
 	if data, err := os.ReadFile(path); err == nil {
-		cfg := &Config{}
+		// Start from the defaults so a file that sets only some keys keeps
+		// working values for the others.
+		cfg := defaultConfig()
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 		}
@@ -151,6 +159,9 @@ func migrate(oldPath, newPath string) (*Config, error) {
 	bakPath := oldPath + ".bak"
 	if err := os.Rename(oldPath, bakPath); err != nil {
 		return nil, fmt.Errorf("failed to rename old config to backup: %w", err)
+	}
+	if Notices != nil {
+		fmt.Fprintf(Notices, "pfs: migrated config from %s to %s (old file kept as %s)\n", oldPath, newPath, bakPath)
 	}
 
 	return cfg, nil

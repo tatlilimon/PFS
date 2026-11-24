@@ -17,6 +17,9 @@ func SystemPrompt(env EnvironmentContext) string {
 	fmt.Fprintln(&b, "## Environment")
 	fmt.Fprintf(&b, "- OS: %s\n", env.OS)
 	fmt.Fprintf(&b, "- Shell: %s\n", env.Shell)
+	if v := firstLine(env.ShellVersion, 120); v != "" {
+		fmt.Fprintf(&b, "- Shell version: %s\n", v)
+	}
 	fmt.Fprintf(&b, "- Architecture: %s\n", env.Architecture)
 	fmt.Fprintln(&b)
 
@@ -92,7 +95,7 @@ func UserPrompt(cmd, output string, exitCode int, cwd string) string {
 	sanitized := SanitizeOutput(output, 8192)
 	var b strings.Builder
 	fmt.Fprintln(&b, "A command failed. Diagnose and correct it.")
-	fmt.Fprintf(&b, "- Command: %s\n", cmd)
+	fmt.Fprintf(&b, "- Command: %s\n", SanitizeOutput(cmd, maxCommandBytes))
 	fmt.Fprintf(&b, "- Exit code: %d\n", exitCode)
 	fmt.Fprintf(&b, "- stderr/output: %s\n", sanitized)
 	fmt.Fprintf(&b, "- Working directory: %s\n", cwd)
@@ -104,8 +107,8 @@ func RetryPrompt(originalUserPrompt, invalidResponse, parseError string) string 
 	var b strings.Builder
 	fmt.Fprintln(&b, "Your previous response was invalid. Try again.")
 	fmt.Fprintf(&b, "Original request:\n%s\n", originalUserPrompt)
-	fmt.Fprintf(&b, "Your invalid response:\n%s\n", invalidResponse)
-	fmt.Fprintf(&b, "Parse error: %s\n", parseError)
+	fmt.Fprintf(&b, "Your invalid response:\n%s\n", SanitizeOutput(invalidResponse, 2048))
+	fmt.Fprintf(&b, "Parse error: %s\n", SanitizeOutput(parseError, 512))
 	fmt.Fprintln(&b, "Respond with a single valid JSON object. No other text.")
 	return b.String()
 }
@@ -114,7 +117,7 @@ func RetryPrompt(originalUserPrompt, invalidResponse, parseError string) string 
 func FallbackPrompt(cmd, output string, exitCode int) string {
 	sanitized := SanitizeOutput(output, 2048)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Command failed: %s\n", cmd)
+	fmt.Fprintf(&b, "Command failed: %s\n", SanitizeOutput(cmd, maxCommandBytes))
 	fmt.Fprintf(&b, "Exit code: %d\n", exitCode)
 	fmt.Fprintf(&b, "Output: %s\n", sanitized)
 	fmt.Fprintln(&b, "Respond with a JSON object: {\"diagnosis\":\"...\",\"corrected_command\":\"...\",\"confidence\":\"high|medium|low\",\"alternative_commands\":[],\"explanation\":\"...\"}")
@@ -129,4 +132,16 @@ func writeJSONExample(b *strings.Builder, v interface{}) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// firstLine returns the first line of s, trimmed and cut to max bytes.
+func firstLine(s string, max int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		s = strings.ToValidUTF8(s[:max], "")
+	}
+	return s
 }

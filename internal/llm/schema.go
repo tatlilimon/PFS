@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 )
 
 // Correction represents the structured response from an LLM provider.
@@ -63,8 +64,9 @@ func CorrectionSchema() json.RawMessage {
 	return json.RawMessage(data)
 }
 
-// SanitizeOutput strips null bytes and truncates output at maxLen
-// with a truncation marker if the input exceeds the limit.
+// SanitizeOutput strips null bytes and truncates output at maxLen bytes
+// with a truncation marker if the input exceeds the limit. Truncation never
+// splits a multi-byte character.
 func SanitizeOutput(s string, maxLen int) string {
 	s = strings.ReplaceAll(s, "\x00", "")
 	if len(s) <= maxLen {
@@ -74,6 +76,9 @@ func SanitizeOutput(s string, maxLen int) string {
 	truncLen := maxLen - len(marker)
 	if truncLen < 0 {
 		truncLen = 0
+	}
+	for truncLen > 0 && !utf8.RuneStart(s[truncLen]) {
+		truncLen--
 	}
 	return s[:truncLen] + marker
 }

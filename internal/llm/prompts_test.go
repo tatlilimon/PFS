@@ -88,3 +88,15 @@ func TestFallbackPromptIsSimple(t *testing.T) {
 	assert.Contains(t, fallback, "ls -la")
 	assert.Contains(t, fallback, "1")
 }
+
+func TestSystemPromptIncludesShellVersion(t *testing.T) {
+	prompt := SystemPrompt(EnvironmentContext{OS: "linux", Shell: "zsh", ShellVersion: "zsh 5.9 (x86_64-redhat-linux-gnu)\nextra line"})
+	assert.Contains(t, prompt, "Shell version: zsh 5.9 (x86_64-redhat-linux-gnu)")
+	assert.NotContains(t, prompt, "extra line")
+	assert.NotContains(t, SystemPrompt(EnvironmentContext{OS: "linux", Shell: "bash"}), "Shell version")
+}
+
+func TestRetryPromptCapsInvalidResponse(t *testing.T) {
+	prompt := RetryPrompt("original", strings.Repeat("x", 50000), "bad")
+	assert.Less(t, len(prompt), 10000)
+}

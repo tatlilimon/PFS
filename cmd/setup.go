@@ -33,13 +33,20 @@ var setupCmd = &cobra.Command{
 		}
 
 		// Detect wrapper directory — check common install locations
-		wrapperDir := detectWrapperDir()
+		exe, _ := os.Executable()
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		wrapperDir := findWrapperDir(exe, []string{"/usr/local/share/pfs/shell", "/usr/share/pfs/shell", "shell"})
+		if wrapperDir == "" {
+			wrapperDir = "/path/to/PFS/shell"
+		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "PFS Shell Setup\n")
 		fmt.Fprintf(cmd.OutOrStdout(), "===============\n\n")
 		fmt.Fprintf(cmd.OutOrStdout(), "Detected shell: %s\n\n", shell)
 		fmt.Fprintf(cmd.OutOrStdout(), "Add this line to %s:\n\n", rcFile)
-		fmt.Fprintf(cmd.OutOrStdout(), "  source %s/shell/%s\n\n", wrapperDir, wrapperFile)
+		fmt.Fprintf(cmd.OutOrStdout(), "  source %s\n\n", filepath.Join(wrapperDir, wrapperFile))
 		fmt.Fprintf(cmd.OutOrStdout(), "Then reload your shell:\n\n")
 		fmt.Fprintf(cmd.OutOrStdout(), "  source %s\n\n", rcFile)
 
@@ -58,31 +65,28 @@ var setupCmd = &cobra.Command{
 	},
 }
 
-func detectWrapperDir() string {
-	// Try to find the wrapper directory relative to the binary
-	exe, err := os.Executable()
-	if err == nil {
+// findWrapperDir returns the directory holding the shell wrappers for the
+// binary at exe: next to it (repository root), one level up (<repo>/bin or
+// <prefix>/bin), under <prefix>/share/pfs/shell (make install), then the
+// fallback directories. It returns "" when none contains pfs.bash.
+func findWrapperDir(exe string, fallbacks []string) string {
+	var candidates []string
+	if exe != "" {
 		dir := filepath.Dir(exe)
-		shellDir := filepath.Join(dir, "..", "shell")
-		if _, err := os.Stat(filepath.Join(shellDir, "pfs.bash")); err == nil {
-			abs, _ := filepath.Abs(shellDir)
-			return abs
-		}
+		candidates = append(candidates,
+			filepath.Join(dir, "shell"),
+			filepath.Join(dir, "..", "shell"),
+			filepath.Join(dir, "..", "share", "pfs", "shell"),
+		)
 	}
-
-	// Check common locations
-	candidates := []string{
-		"/usr/local/share/pfs",
-		"/usr/share/pfs",
-		".",
-	}
+	candidates = append(candidates, fallbacks...)
 	for _, dir := range candidates {
-		if _, err := os.Stat(filepath.Join(dir, "shell", "pfs.bash")); err == nil {
-			abs, _ := filepath.Abs(dir)
-			return abs
+		if _, err := os.Stat(filepath.Join(dir, "pfs.bash")); err == nil {
+			if abs, err := filepath.Abs(dir); err == nil {
+				return filepath.Clean(abs)
+			}
+			return filepath.Clean(dir)
 		}
 	}
-
-	// Fallback: tell user to use the repo path
-	return "/path/to/PFS"
+	return ""
 }

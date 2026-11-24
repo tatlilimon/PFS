@@ -7,3 +7,6 @@ pfs
 *.test
 *.out
 vendor/
+
+# Local notes from AI planning tools (not part of the project)
+.sisyphus/

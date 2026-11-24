@@ -3,9 +3,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,7 +144,7 @@ func TestGetCorrection_Fallback_ExtractJSON(t *testing.T) {
 		if count <= 2 {
 			w.Write([]byte(ollamaResponse(t, "not json")))
 		} else {
-			w.Write([]byte(ollamaResponse(t, "Here is the result: " + validCorrectionJSON() + " done")))
+			w.Write([]byte(ollamaResponse(t, "Here is the result: "+validCorrectionJSON()+" done")))
 		}
 	}))
 	defer server.Close()
@@ -224,4 +227,198 @@ func TestExtractJSON(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func noFixJSON() string {
+	return `{"diagnosis":"The file does not exist, so there is nothing to fix.","corrected_command":null,"confidence":"high"}`
+}
+
+// A first answer that says "cannot be fixed" used to dereference a nil parse
+// error while building the retry prompt and crash the program.
+func TestGetCorrection_NoFixAtTier1(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Write([]byte(ollamaResponse(t, noFixJSON())))
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(server)
+	var correction *Correction
+	var err error
+	require.NotPanics(t, func() {
+		correction, err = provider.GetCorrection(context.Background(), "cat nope.txt", "", 1, defaultEnvCtx())
+	})
+	require.NoError(t, err)
+	assert.Nil(t, correction.CorrectedCommand)
+	assert.Contains(t, correction.Diagnosis, "does not exist")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "a valid no-fix answer must not trigger retries")
+}
+
+// The shell wrapper evaluates whatever pfs prints on stdout, so diagnostics must
+// never go there.
+func TestGetCorrection_DebugOutputNeverReachesStdout(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Write([]byte(ollamaResponse(t, "not json")))
+			return
+		}
+		w.Write([]byte(ollamaResponse(t, validCorrectionJSON())))
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(server)
+	provider.cfg.DebugLevel = int(config.DebugLevelDetailed)
+	var debug strings.Builder
+	provider.debug = &debug
+
+	stdout := captureStdout(t, func() {
+		_, err := provider.GetCorrection(context.Background(), "lş -l", "", 127, defaultEnvCtx())
+		require.NoError(t, err)
+	})
+	assert.Empty(t, stdout)
+	assert.Contains(t, debug.String(), "Tier 1")
+}
+
+func TestGetCorrection_RejectsUnsafeCommandAndRetries(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Write([]byte(ollamaResponse(t, "{\"diagnosis\":\"x\",\"corrected_command\":\"rm -rf ~ #\\rls -l\",\"confidence\":\"high\"}")))
+			return
+		}
+		w.Write([]byte(ollamaResponse(t, validCorrectionJSON())))
+	}))
+	defer server.Close()
+
+	correction, err := newTestProvider(server).GetCorrection(context.Background(), "lş -l", "", 127, defaultEnvCtx())
+	require.NoError(t, err)
+	assert.Equal(t, "ls -l", *correction.CorrectedCommand)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
+}
+
+func TestGetCorrection_ModelNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"model \"test-model\" not found, try pulling it first"}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestProvider(server).GetCorrection(context.Background(), "ls", "", 1, defaultEnvCtx())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrModelNotFound)
+	assert.Contains(t, err.Error(), "ollama pull test-model")
+}
+
+func TestNewOllamaProvider_ServerDown(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	url := server.URL
+	server.Close() // nothing listens on this port any more
+
+	_, err := NewOllamaProvider(&config.Config{OllamaBaseURL: url, OllamaModel: "m"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrOllamaUnavailable)
+	assert.Contains(t, err.Error(), "ollama serve")
+}
+
+func TestNewOllamaProvider_HeartbeatTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	old := heartbeatTimeout
+	heartbeatTimeout = 200 * time.Millisecond
+	defer func() { heartbeatTimeout = old }()
+
+	start := time.Now()
+	_, err := NewOllamaProvider(&config.Config{OllamaBaseURL: server.URL, OllamaModel: "m"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrOllamaUnavailable)
+	assert.Less(t, time.Since(start), 3*time.Second)
+}
+
+func TestGetCorrection_ResponseTooLarge(t *testing.T) {
+	old := maxResponseBytes
+	maxResponseBytes = 4096
+	defer func() { maxResponseBytes = old }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Write([]byte(ollamaResponse(t, `{"diagnosis":"`+strings.Repeat("a", 10000)+`"}`)))
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(&config.Config{OllamaBaseURL: server.URL, OllamaModel: "m"})
+	require.NoError(t, err)
+	_, err = provider.GetCorrection(context.Background(), "ls", "", 1, defaultEnvCtx())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too large")
+}
+
+func TestGetCorrectionStream_DeliversTokensAndParses(t *testing.T) {
+	full := validCorrectionJSON()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req api.GenerateRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NotNil(t, req.Stream)
+		assert.True(t, *req.Stream)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for i := 0; i < len(full); i += 7 {
+			end := i + 7
+			if end > len(full) {
+				end = len(full)
+			}
+			chunk, _ := json.Marshal(api.GenerateResponse{Response: full[i:end]})
+			w.Write(append(chunk, '\n'))
+		}
+		done, _ := json.Marshal(api.GenerateResponse{Done: true})
+		w.Write(append(done, '\n'))
+	}))
+	defer server.Close()
+
+	var tokens strings.Builder
+	correction, err := newTestProvider(server).GetCorrectionStream(context.Background(), "lş -l", "", 127, defaultEnvCtx(), func(tok string) {
+		tokens.WriteString(tok)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ls -l", *correction.CorrectedCommand)
+	assert.Equal(t, full, tokens.String())
+}
+
+func TestGetCorrectionStream_InvalidStreamFallsBackToRetries(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			chunk, _ := json.Marshal(api.GenerateResponse{Response: "not json", Done: true})
+			w.Write(append(chunk, '\n'))
+			return
+		}
+		w.Write([]byte(ollamaResponse(t, validCorrectionJSON())))
+	}))
+	defer server.Close()
+
+	correction, err := newTestProvider(server).GetCorrectionStream(context.Background(), "lş -l", "", 127, defaultEnvCtx(), func(string) {})
+	require.NoError(t, err)
+	assert.Equal(t, "ls -l", *correction.CorrectedCommand)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+	fn()
+	require.NoError(t, w.Close())
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(data)
 }

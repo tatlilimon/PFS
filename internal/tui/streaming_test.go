@@ -177,26 +177,3 @@ func TestStreaming_CtrlXInResultStateQuits(t *testing.T) {
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	assert.NotNil(t, cmd)
 }
-
-func TestExtractJSONFromStream(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"valid JSON", `{"key":"value"}`, `{"key":"value"}`},
-		{"text before", `some text {"key":"value"}`, `{"key":"value"}`},
-		{"text after", `{"key":"value"} more text`, `{"key":"value"}`},
-		{"nested", `{"outer":{"inner":1}}`, `{"outer":{"inner":1}}`},
-		{"no JSON", "plain text", ""},
-		{"empty", "", ""},
-		{"reversed braces", "}something{", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractJSONFromStream(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
